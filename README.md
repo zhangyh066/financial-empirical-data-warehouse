@@ -14,6 +14,24 @@
 
 ---
 
+## 📸 界面预览
+
+**样本概览**（数仓指标卡片 + 学术 Table 1 描述性统计）：
+
+![样本概览](docs/images/overview.png)
+
+**企业检索与杜邦分解**（公司财务指标时序 + ROE 三因子分解）：
+
+![企业检索](docs/images/company_lookup.png)
+
+![杜邦分解](docs/images/dupont_analysis.png)
+
+**数据导出**（样本清洗 / 缩尾 / 变量勾选，一键导出 Stata 与 CSV）：
+
+![数据导出](docs/images/data_export.png)
+
+---
+
 ## 📁 目录结构
 
 ```
