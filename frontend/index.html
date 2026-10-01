@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EFDW — 企业财务实证数据仓库系统</title>
+    <meta name="description" content="Enterprise Financial Data Warehouse: 企业财务实证数据仓库——财务三表指标计算、杜邦分解、4级名称消歧与一键导出 Stata/CSV 终端">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- ─── Header ─── -->
+    <header id="site-header">
+        <div class="header-inner">
+            <div class="header-brand">
+                <span class="brand-acronym">EFDW</span>
+                <span class="brand-divider"></span>
+                <span class="brand-full">企业财务实证数据仓库系统</span>
+            </div>
+            <div class="header-status" id="api-status">
+                <span class="status-dot"></span>
+                <span class="status-text">Connecting…</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ─── Navigation Tabs ─── -->
+    <nav id="main-nav">
+        <div class="nav-inner">
+            <button class="nav-tab active" data-tab="overview">
+                <span class="tab-num">01</span>
+                <span class="tab-label">样本概览</span>
+            </button>
+            <button class="nav-tab" data-tab="company">
+                <span class="tab-num">02</span>
+                <span class="tab-label">企业检索</span>
+            </button>
+            <button class="nav-tab" data-tab="export">
+                <span class="tab-num">03</span>
+                <span class="tab-label">数据导出</span>
+            </button>
+            <button class="nav-tab" data-tab="import">
+                <span class="tab-num">04</span>
+                <span class="tab-label">数据导入</span>
+            </button>
+            <button class="nav-tab" data-tab="align">
+                <span class="tab-num">05</span>
+                <span class="tab-label">智能对齐</span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- ─── Main Content ─── -->
+    <main id="main-content">
+
+        <!-- ═══ Tab 1: Overview ═══ -->
+        <section class="tab-panel active" id="panel-overview">
+
+            <!-- Metric Cards -->
+            <div class="metric-row" id="metric-cards">
+                <div class="metric-card">
+                    <div class="metric-value" id="stat-firms">—</div>
+                    <div class="metric-label">样本企业数</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="stat-years">—</div>
+                    <div class="metric-label">研究时间窗口</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="stat-obs">—</div>
+                    <div class="metric-label">观测值 (Obs)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="stat-industries">—</div>
+                    <div class="metric-label">行业大类数</div>
+                </div>
+            </div>
+
+            <!-- Descriptive Statistics Table -->
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Table 1 &mdash; Descriptive Statistics</h2>
+                    <p class="section-sub">主要财务变量描述性统计（双侧 1% 缩尾、剔除金融业后）</p>
+                </div>
+                <div class="table-wrap">
+                    <table id="desc-table">
+                        <thead>
+                            <tr>
+                                <th class="col-var">Variable</th>
+                                <th>N</th>
+                                <th>Mean</th>
+                                <th>S.D.</th>
+                                <th>Min</th>
+                                <th>P25</th>
+                                <th>Median</th>
+                                <th>P75</th>
+                                <th>Max</th>
+                            </tr>
+                        </thead>
+                        <tbody id="desc-tbody">
+                            <!-- Rendered by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Charts Row -->
+            <div class="charts-row">
+                <div class="section-block chart-block">
+                    <div class="section-header">
+                        <h2>Industry Distribution</h2>
+                        <p class="section-sub">样本企业行业分布（按证监会 2012 版行业门类）</p>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="chart-industry"></canvas>
+                    </div>
+                </div>
+                <div class="section-block chart-block">
+                    <div class="section-header">
+                        <h2>Variable Distribution</h2>
+                        <p class="section-sub">选定财务变量频率分布直方图</p>
+                    </div>
+                    <div class="chart-controls">
+                        <select id="dist-var-select" class="input-select">
+                            <option value="roa">ROA (总资产收益率)</option>
+                            <option value="roe">ROE (净资产收益率)</option>
+                            <option value="leverage">Lev (资产负债率)</option>
+                            <option value="revenue_growth">Growth (营收增长率)</option>
+                            <option value="gross_margin">毛利率</option>
+                            <option value="current_ratio">流动比率</option>
+                            <option value="total_asset_turnover">总资产周转率</option>
+                            <option value="interest_coverage">利息保障倍数</option>
+                            <option value="firm_size">Size (企业规模)</option>
+                            <option value="tobin_q">Tobin's Q (托宾Q)</option>
+                        </select>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="chart-distribution"></canvas>
+                    </div>
+                    <div class="dist-summary" id="dist-summary"></div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ═══ Tab 2: Company Search ═══ -->
+        <section class="tab-panel" id="panel-company">
+
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Company Lookup</h2>
+                    <p class="section-sub">输入股票代码或企业名称进行检索，查看财务指标时序与杜邦分解</p>
+                </div>
+                <div class="search-bar">
+                    <input type="text" id="company-search-input" class="input-text" placeholder="输入代码或名称，例如 000002 或 万科">
+                    <button id="company-search-btn" class="btn btn-primary">检索</button>
+                </div>
+                <!-- Company list for quick select -->
+                <div class="company-list-wrap" id="company-list-wrap" style="display:none;">
+                    <table class="company-list-table">
+                        <thead><tr><th>代码</th><th>名称</th><th>行业</th><th></th></tr></thead>
+                        <tbody id="company-list-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Company detail card -->
+            <div class="section-block" id="company-detail" style="display:none;">
+                <div class="company-profile">
+                    <div class="profile-header">
+                        <h2 id="company-name">—</h2>
+                        <span class="profile-badge" id="company-code">—</span>
+                        <span class="profile-badge badge-industry" id="company-industry">—</span>
+                        <span class="profile-badge" id="company-list-date">—</span>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table id="company-panel-table">
+                        <thead>
+                            <tr>
+                                <th>Year</th>
+                                <th>总资产 (Assets)</th>
+                                <th>营业收入 (Revenue)</th>
+                                <th>净利润 (Net Inc.)</th>
+                                <th>ROA</th>
+                                <th>ROE</th>
+                                <th>营收增长</th>
+                                <th>资产负债率</th>
+                                <th>流动比率</th>
+                            </tr>
+                        </thead>
+                        <tbody id="company-panel-tbody"></tbody>
+                    </table>
+                </div>
+
+                <!-- DuPont 杜邦分解 -->
+                <div style="margin-top:24px;">
+                    <h3 style="font-size:0.88rem; font-weight:600; margin-bottom:8px; color:var(--accent);">杜邦分解 (DuPont Analysis) &mdash; ROE = 销售净利率 × 总资产周转率 × 权益乘数</h3>
+                    <div class="table-wrap">
+                        <table id="dupont-table">
+                            <thead>
+                                <tr>
+                                    <th>Year</th>
+                                    <th>销售净利率 (Net Margin)</th>
+                                    <th>总资产周转率 (TAT)</th>
+                                    <th>权益乘数 (EM)</th>
+                                    <th>ROE (杜邦验证)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dupont-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="chart-container" style="max-width:700px;margin-top:24px;">
+                    <canvas id="chart-company-trend"></canvas>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ═══ Tab 3: Export ═══ -->
+        <section class="tab-panel" id="panel-export">
+
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Self-Service Data Exporter</h2>
+                    <p class="section-sub">根据论文实证需要，配置样本筛选条件与财务变量清单，一键生成可直接回归的数据集</p>
+                </div>
+
+                <div class="export-grid">
+                    <!-- Left: Config -->
+                    <div class="export-config">
+                        <fieldset class="config-group">
+                            <legend>时间窗口 (Year Range)</legend>
+                            <div class="range-row">
+                                <label>起始年份</label>
+                                <input type="number" id="exp-year-min" class="input-number" value="2018" min="2000" max="2030">
+                                <label>截止年份</label>
+                                <input type="number" id="exp-year-max" class="input-number" value="2022" min="2000" max="2030">
+                            </div>
+                        </fieldset>
+
+                        <fieldset class="config-group">
+                            <legend>样本清洗标准</legend>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="exp-exclude-fin" checked>
+                                <span>剔除金融行业公司（证监会门类 J）</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="exp-exclude-new" checked>
+                                <span>剔除上市不足一年的公司（新股筛选）</span>
+                            </label>
+                        </fieldset>
+
+                        <fieldset class="config-group">
+                            <legend>缩尾处理 (Winsorize)</legend>
+                            <select id="exp-winsorize" class="input-select">
+                                <option value="0">不缩尾</option>
+                                <option value="0.01" selected>双侧 1% 缩尾（学术惯例）</option>
+                                <option value="0.02">双侧 2% 缩尾</option>
+                                <option value="0.05">双侧 5% 缩尾</option>
+                            </select>
+                        </fieldset>
+
+                        <fieldset class="config-group">
+                            <legend>导出变量（按财务能力分组）</legend>
+                            <div class="var-checklist" id="var-checklist">
+                                <div class="var-group-label">规模与市场</div>
+                                <label class="checkbox-label"><input type="checkbox" value="firm_size" checked><span>Size (ln Assets)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="leverage" checked><span>Lev (资产负债率)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="tobin_q"><span>Tobin's Q</span></label>
+
+                                <div class="var-group-label">盈利能力</div>
+                                <label class="checkbox-label"><input type="checkbox" value="roa" checked><span>ROA (总资产收益率)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="roe" checked><span>ROE (净资产收益率)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="gross_margin"><span>销售毛利率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="net_margin"><span>销售净利率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="operating_margin"><span>营业利润率</span></label>
+
+                                <div class="var-group-label">成长性</div>
+                                <label class="checkbox-label"><input type="checkbox" value="revenue_growth" checked><span>营收增长率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="asset_growth"><span>总资产增长率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="net_income_growth"><span>净利润增长率</span></label>
+
+                                <div class="var-group-label">偿债能力</div>
+                                <label class="checkbox-label"><input type="checkbox" value="current_ratio" checked><span>流动比率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="quick_ratio"><span>速动比率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="cash_ratio"><span>现金比率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="interest_coverage"><span>利息保障倍数</span></label>
+
+                                <div class="var-group-label">营运能力</div>
+                                <label class="checkbox-label"><input type="checkbox" value="total_asset_turnover" checked><span>总资产周转率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="inventory_turnover"><span>存货周转率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="receivables_turnover"><span>应收账款周转率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="cash_conversion_cycle"><span>现金转换周期</span></label>
+
+                                <div class="var-group-label">现金流能力</div>
+                                <label class="checkbox-label"><input type="checkbox" value="ocf_to_assets"><span>经营现金流/总资产</span></label>
+
+                                <div class="var-group-label">多期滞后 / 超前项</div>
+                                <label class="checkbox-label"><input type="checkbox" value="lag_roa"><span>L.ROA (滞后一期)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="lag2_roa"><span>L2.ROA (滞后两期)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="lag_roe"><span>L.ROE (滞后一期)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="lag_leverage"><span>L.Lev (滞后一期)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="lag_revenue_growth"><span>L.营收增长 (滞后一期)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="lead_roa"><span>F.ROA (超前一期)</span></label>
+                            </div>
+                        </fieldset>
+                    </div>
+
+                    <!-- Right: Preview & Download -->
+                    <div class="export-preview">
+                        <div class="preview-toolbar">
+                            <button id="btn-preview" class="btn btn-primary">生成预览</button>
+                            <span class="preview-info" id="preview-info"></span>
+                        </div>
+                        <div class="table-wrap" id="preview-table-wrap" style="display:none;">
+                            <table id="preview-table">
+                                <thead id="preview-thead"></thead>
+                                <tbody id="preview-tbody"></tbody>
+                            </table>
+                            <p class="preview-note">仅展示前 10 行数据</p>
+                        </div>
+                        <div class="download-row" id="download-row" style="display:none;">
+                            <a id="btn-dl-stata" class="btn btn-download" href="#">
+                                <span class="dl-icon">↓</span> 下载 Stata .dta
+                            </a>
+                            <a id="btn-dl-csv" class="btn btn-download btn-download-alt" href="#">
+                                <span class="dl-icon">↓</span> 下载 CSV
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ═══ Tab 4: Data Import ═══ -->
+        <section class="tab-panel" id="panel-import">
+
+            <!-- Active Database Status / Pipeline Banner -->
+            <div class="section-block pipeline-banner">
+                <div class="pipeline-header-wrap">
+                    <div class="pipeline-title-group">
+                        <span class="pipeline-tag">数仓控制台</span>
+                        <h2>一键运行清洗与财务指标计算 Pipeline</h2>
+                        <p class="section-sub">导入完 ODS 贴源层数据（公司基本信息、财务三表、曾用名历史）后，点击此按钮可一键运行后端 SQL 清洗：构建 DWD 维度表与 DWS 财务指标面板宽表（含多期滞后项），并生成 ADS 行业聚合数据集市。</p>
+                    </div>
+                    <button id="btn-run-pipeline" class="btn btn-pipeline">
+                        <span class="pipeline-icon">⚙️</span> 运行清洗 Pipeline
+                    </button>
+                </div>
+                <div id="pipeline-status-alert" class="alert-box" style="display:none;"></div>
+            </div>
+
+            <div class="import-grid">
+                <!-- Left Column: Upload Drop Zone and Config -->
+                <div class="import-left">
+                    <div class="section-block">
+                        <div class="section-header">
+                            <h2>File Upload</h2>
+                            <p class="section-sub">支持 CSV, Excel (.xlsx/.xls), Parquet, JSON, Stata (.dta), SAS, SPSS 等格式</p>
+                        </div>
+
+                        <!-- Drop Zone -->
+                        <div class="upload-dropzone" id="upload-dropzone">
+                            <input type="file" id="import-file-input" style="display:none;" accept=".csv,.tsv,.txt,.xlsx,.xls,.parquet,.pq,.json,.ndjson,.jsonl,.dta,.sas7bdat,.sav">
+                            <div class="dropzone-content">
+                                <span class="dropzone-icon">📥</span>
+                                <span class="dropzone-text">将财务数据拖拽到此处，或 <span class="text-link">点击上传</span></span>
+                                <span class="dropzone-sub">支持多源数据格式，股票代码等自动保护前导零</span>
+                            </div>
+                        </div>
+
+                        <!-- Config Fields -->
+                        <div class="import-config-fields">
+                            <fieldset class="config-group" style="margin-top: var(--sp-4);">
+                                <legend>导入配置 (Import Settings)</legend>
+                                <div class="field-row">
+                                    <label for="import-table-name" style="font-size:0.8rem; font-weight:500; display:block; margin-bottom:var(--sp-1);">目标表名</label>
+                                    <input type="text" id="import-table-name" class="input-text" style="max-width:100%;" placeholder="例如 ods.company_info (留空自动生成)">
+                                </div>
+                                <div class="field-row" style="margin-top: var(--sp-3);">
+                                    <label for="import-varchar-cols" style="font-size:0.8rem; font-weight:500; display:block; margin-bottom:var(--sp-1);">强制文本列</label>
+                                    <input type="text" id="import-varchar-cols" class="input-text" style="max-width:100%;" placeholder="强制转为文本以防丢失前导零的列名(逗号分隔，如 stkcd, indcd)">
+                                    <p class="field-note" style="font-size:0.72rem; color:var(--text-muted); margin-top:var(--sp-1);">默认已保护：stkcd, stockcode, creditcode, indcd, industry_code 等</p>
+                                </div>
+                            </fieldset>
+                        </div>
+
+                        <!-- Import Trigger Button -->
+                        <div class="import-action-row" style="margin-top: var(--sp-4); display: flex; justify-content: flex-end;">
+                            <button id="btn-trigger-import" class="btn btn-primary" style="padding:var(--sp-3) var(--sp-6);" disabled>
+                                🚀 开始导入 DuckDB
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Table Inventory Section -->
+                    <div class="section-block">
+                        <div class="section-header">
+                            <h2>Database Inventory</h2>
+                            <p class="section-sub">当前 DuckDB 数仓内 ODS / DWD / DWS / ADS 四层所有表及观测值行数</p>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="inventory-table">
+                                <thead>
+                                    <tr>
+                                        <th class="col-var">Schema.Table (表名)</th>
+                                        <th>分层</th>
+                                        <th>数据量 (行数)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="inventory-tbody">
+                                    <tr><td colspan="3" class="text-center" style="font-family:var(--font-sans);color:var(--text-muted);text-align:center;">正在加载数据库结构...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column: Results & Quality Checks -->
+                <div class="import-right">
+                    <div class="section-block" id="import-result-placeholder" style="height:100%; display:flex; align-items:center; justify-content:center; text-align:center; min-height:400px;">
+                        <div class="placeholder-content" style="padding:var(--sp-6); max-width:400px; margin:0 auto;">
+                            <span class="placeholder-icon" style="font-size:3rem; display:block; margin-bottom:var(--sp-3);">📊</span>
+                            <h3 style="font-size:1.05rem; font-weight:600; margin-bottom:var(--sp-2);">数据预检与导入报告</h3>
+                            <p style="font-size:0.8rem; color:var(--text-muted); line-height:1.6;">在左侧选择文件并完成导入后，此处将实时展示：<br>1. 表结构与数据类型预检<br>2. 连续/离散变量空值率统计 (Missing Rates)<br>3. 重复值与主键冲突检测<br>4. 前 10 行数据样品预览</p>
+                        </div>
+                    </div>
+
+                    <!-- Import Result Report (Initially Hidden) -->
+                    <div class="section-block" id="import-result-report" style="display:none;">
+                        <div class="section-header">
+                            <h2>Quality Control & Import Report</h2>
+                            <p class="section-sub" id="import-report-subtitle">数据质量与导入预检报告</p>
+                        </div>
+
+                        <div class="alert-box" id="import-report-alert" style="margin-bottom:var(--sp-4);"></div>
+
+                        <!-- Summary Cards -->
+                        <div class="quality-summary-cards" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:var(--sp-3); margin-bottom:var(--sp-5);">
+                            <div class="q-card" style="border:1px solid var(--border); padding:var(--sp-3); border-radius:var(--radius-sm); text-align:center;">
+                                <span class="q-card-label" style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; display:block;">已导入表名</span>
+                                <span class="q-card-value" id="q-table-name" style="font-family:var(--font-mono); font-size:0.9rem; font-weight:600; color:var(--accent); display:block; margin-top:var(--sp-1); word-break:break-all;">—</span>
+                            </div>
+                            <div class="q-card" style="border:1px solid var(--border); padding:var(--sp-3); border-radius:var(--radius-sm); text-align:center;">
+                                <span class="q-card-label" style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; display:block;">总行数 (Rows)</span>
+                                <span class="q-card-value" id="q-total-rows" style="font-family:var(--font-mono); font-size:1.1rem; font-weight:600; color:var(--text-primary); display:block; margin-top:var(--sp-1);">—</span>
+                            </div>
+                            <div class="q-card" style="border:1px solid var(--border); padding:var(--sp-3); border-radius:var(--radius-sm); text-align:center;">
+                                <span class="q-card-label" style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; display:block;">重复行数 (Duplicates)</span>
+                                <span class="q-card-value" id="q-dup-rows" style="font-family:var(--font-mono); font-size:1.1rem; font-weight:600; color:var(--text-primary); display:block; margin-top:var(--sp-1);">—</span>
+                            </div>
+                        </div>
+
+                        <!-- Column Details -->
+                        <h3 class="subsection-title" style="font-size:0.85rem; font-weight:600; margin-bottom:var(--sp-3); border-bottom:1px solid var(--border); padding-bottom:var(--sp-2);">📐 列结构与缺失率校验 (Schema & Null Rates)</h3>
+                        <div class="table-wrap">
+                            <table class="quality-table">
+                                <thead>
+                                    <tr>
+                                        <th class="col-var">Column Name (字段名)</th>
+                                        <th>Type (数据类型)</th>
+                                        <th>Null Count (缺失数)</th>
+                                        <th>Null Pct (缺失率)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="quality-tbody"></tbody>
+                            </table>
+                        </div>
+
+                        <!-- Data Preview -->
+                        <h3 class="subsection-title" style="font-size:0.85rem; font-weight:600; margin-top:var(--sp-6); margin-bottom:var(--sp-3); border-bottom:1px solid var(--border); padding-bottom:var(--sp-2);">🔍 贴源层预览 (Data Sample Preview - First 10 Rows)</h3>
+                        <div class="table-wrap">
+                            <table class="sample-preview-table">
+                                <thead id="import-preview-thead"></thead>
+                                <tbody id="import-preview-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ═══ Tab 5: Entity Resolution / Align ═══ -->
+        <section class="tab-panel" id="panel-align">
+
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Smart Entity Resolution & Mapping</h2>
+                    <p class="section-sub">输入外部或凌乱的企业名称，一键智能对齐至标准股票代码与行业分类，解决多源财务数据"主体身份对齐地狱"</p>
+                </div>
+
+                <div class="align-grid">
+                    <!-- Left: Input & Config -->
+                    <div class="align-input-panel">
+                        <fieldset class="config-group">
+                            <legend>输入企业名称清单</legend>
+                            <textarea id="align-names-input" class="input-textarea" rows="12" placeholder="每行一个企业名称，支持包含噪声的文本，例如：&#10;深发展&#10;平安银行&#10;万科集团&#10;比亚蒂&#10;非凡科技"></textarea>
+                            <div class="textarea-note" style="font-size:0.75rem; color:var(--text-muted); margin-top:var(--sp-2);">支持从 Excel、Stata 变量中批量复制粘贴企业名称列进行快速对齐。</div>
+                        </fieldset>
+
+                        <fieldset class="config-group" style="margin-top:var(--sp-4);">
+                            <legend>模糊匹配敏感度 (Threshold)</legend>
+                            <div class="slider-row" style="display:flex; align-items:center; gap:var(--sp-3);">
+                                <input type="range" id="align-threshold" class="input-slider" style="flex:1; accent-color:var(--accent);" min="0.5" max="0.95" step="0.05" value="0.7">
+                                <span class="slider-val" id="align-threshold-val" style="font-family:var(--font-mono); font-weight:600; color:var(--accent); font-size:0.9rem; min-width:35px; text-align:right;">0.70</span>
+                            </div>
+                            <p class="field-note" style="font-size:0.72rem; color:var(--text-muted); margin-top:var(--sp-2);">Jaro-Winkler 字符相似度阈值。数值越高越严格，越不容易发生误匹配。</p>
+                        </fieldset>
+
+                        <div style="margin-top:var(--sp-5); display:flex; justify-content:flex-end;">
+                            <button id="btn-run-align" class="btn btn-primary" style="padding:var(--sp-3) var(--sp-6);">
+                                🔍 智能对齐与身份消歧
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Right: Results & Summary -->
+                    <div class="align-output-panel">
+                        <!-- Summary Cards -->
+                        <div class="align-summary-row" id="align-summary-row" style="display:none; grid-template-columns:repeat(3, 1fr); gap:var(--sp-3); margin-bottom:var(--sp-4);">
+                            <div class="align-stat-card" style="border:1px solid var(--border); padding:var(--sp-3); border-radius:var(--radius-sm); text-align:center; background:var(--bg-card);">
+                                <span class="align-stat-label" style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; display:block;">总处理数</span>
+                                <span class="align-stat-val" id="align-stat-total" style="font-family:var(--font-mono); font-size:1.3rem; font-weight:700; color:var(--text-primary); display:block; margin-top:var(--sp-1);">0</span>
+                            </div>
+                            <div class="align-stat-card" style="border:1px solid var(--border); padding:var(--sp-3); border-radius:var(--radius-sm); text-align:center; background:var(--bg-card);">
+                                <span class="align-stat-label" style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; display:block;">对齐成功率</span>
+                                <span class="align-stat-val" id="align-stat-success" style="font-family:var(--font-mono); font-size:1.3rem; font-weight:700; color:var(--green); display:block; margin-top:var(--sp-1);">0%</span>
+                            </div>
+                            <div class="align-stat-card" style="border:1px solid var(--border); padding:var(--sp-3); border-radius:var(--radius-sm); text-align:center; background:var(--bg-card);">
+                                <span class="align-stat-label" style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; display:block;">精准对齐数</span>
+                                <span class="align-stat-val" id="align-stat-exact" style="font-family:var(--font-mono); font-size:1.3rem; font-weight:700; color:var(--accent); display:block; margin-top:var(--sp-1);">0</span>
+                            </div>
+                        </div>
+
+                        <!-- Results Table -->
+                        <div class="section-block" id="align-results-block" style="display:none; padding:0; border:none; margin:0; box-shadow:none; background:transparent;">
+                            <div class="section-header-wrap" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--sp-3);">
+                                <h3 style="font-size:0.85rem; font-weight:600; color:var(--accent); margin:0;">对齐结果对照表 (Aligned Mapping Table)</h3>
+                                <button id="btn-dl-align-csv" class="btn btn-download btn-download-alt" style="padding:var(--sp-1) var(--sp-3); font-size:0.72rem; display:inline-flex; align-items:center; gap:4px;">
+                                    <span>↓</span> 导出映射表 CSV
+                                </button>
+                            </div>
+                            <div class="table-wrap" style="max-height:360px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-card);">
+                                <table id="align-results-table">
+                                    <thead>
+                                        <tr>
+                                            <th class="col-var" style="text-align:left;">原始输入 (Raw Input)</th>
+                                            <th>标准代码 (Stkcd)</th>
+                                            <th>标准官方名称 (Standard Name)</th>
+                                            <th>大类行业 (Industry)</th>
+                                            <th style="text-align:center;">匹配级别 (Match Level)</th>
+                                            <th>置信度 (Score)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="align-results-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Empty state -->
+                        <div class="align-empty-state" id="align-empty-state" style="border:2px dashed var(--border-dark); border-radius:var(--radius); padding:var(--sp-10) var(--sp-6); text-align:center; background:var(--bg-card); display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:320px;">
+                            <span style="font-size:2.8rem; display:block; margin-bottom:var(--sp-3); opacity:0.85;">🔍</span>
+                            <h3 style="font-size:0.95rem; font-weight:600; color:var(--text-primary); margin-bottom:var(--sp-2);">等待执行实体对齐</h3>
+                            <p style="font-size:0.78rem; color:var(--text-muted); line-height:1.6; max-width:320px; margin:0 auto;">在左侧粘贴输入您抓取的凌乱企业名称清单，设置模糊匹配敏感度，点击对齐按钮即可在此处获取消歧报告。</p>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+    <!-- ─── Footer ─── -->
+    <footer id="site-footer">
+        <span>EFDW · 企业财务实证数据仓库系统 · Built with Python + DuckDB + FastAPI</span>
+    </footer>
+
+    <!-- Chart.js (lightweight, no framework) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
