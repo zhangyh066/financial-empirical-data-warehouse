@@ -31,6 +31,8 @@ Chart.defaults.plugins.tooltip.titleFont = { size: 11, weight: '500' };
 Chart.defaults.plugins.tooltip.bodyFont = { size: 11 };
 
 // ─── Tab Navigation ───
+let dictLoaded = false;
+
 $$('.nav-tab').forEach(tab => {
     tab.addEventListener('click', () => {
         $$('.nav-tab').forEach(t => t.classList.remove('active'));
@@ -39,6 +41,9 @@ $$('.nav-tab').forEach(tab => {
         $(`#panel-${tab.dataset.tab}`).classList.add('active');
         if (tab.dataset.tab === 'import') {
             loadInventory();
+        }
+        if (tab.dataset.tab === 'dict' && !dictLoaded) {
+            loadDict();
         }
     });
 });
@@ -241,6 +246,13 @@ $('#company-search-input').addEventListener('input', (e) => {
     }
 });
 
+function riskBadgeHTML(risk) {
+    if (risk === '危险区') return '<span class="risk-badge risk-danger">危险区</span>';
+    if (risk === '灰色区') return '<span class="risk-badge risk-gray">灰色区</span>';
+    if (risk === '安全区') return '<span class="risk-badge risk-safe">安全区</span>';
+    return '—';
+}
+
 async function loadCompanyDetail(stkcd) {
     try {
         const data = await (await fetch(`${API}/api/company/${stkcd}`)).json();
@@ -252,7 +264,7 @@ async function loadCompanyDetail(stkcd) {
         $('#company-industry').textContent = `${data.industry_code} · ${data.industry_category}`;
         $('#company-list-date').textContent = data.list_date ? `上市 ${data.list_date}` : '';
 
-        // Panel table: 核心财务指标时序
+        // Panel table: 核心财务指标时序（含 Altman Z 预警）
         const tbody = $('#company-panel-tbody');
         tbody.innerHTML = '';
         data.panel.forEach(r => {
@@ -267,6 +279,8 @@ async function loadCompanyDetail(stkcd) {
                 <td>${fmt(r.revenue_growth, 4)}</td>
                 <td>${fmt(r.leverage, 3)}</td>
                 <td>${fmt(r.current_ratio, 3)}</td>
+                <td>${r.altman_z == null ? '—' : fmt(r.altman_z, 3)}</td>
+                <td>${riskBadgeHTML(r.altman_risk)}</td>
             `;
             tbody.appendChild(tr);
         });
@@ -354,17 +368,14 @@ $('#btn-preview').addEventListener('click', async () => {
         return;
     }
     try {
-        // Use descriptive API to get a sense of the data, and fetch CSV for preview
         const qs = buildExportQuery(p);
         const csvRes = await fetch(`${API}/api/export/csv?${qs}`);
         const csvText = await csvRes.text();
 
-        // Parse CSV
         const lines = csvText.trim().split('\n');
         const headers = lines[0].split(',');
         const rows = lines.slice(1, 11).map(l => l.split(','));
 
-        // Render
         $('#preview-thead').innerHTML = '<tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr>';
         const tbody = $('#preview-tbody');
         tbody.innerHTML = '';
@@ -378,12 +389,118 @@ $('#btn-preview').addEventListener('click', async () => {
         $('#preview-table-wrap').style.display = 'block';
         $('#download-row').style.display = 'flex';
 
-        // Set download links
         $('#btn-dl-stata').href = `${API}/api/export/stata?${qs}`;
         $('#btn-dl-csv').href = `${API}/api/export/csv?${qs}`;
     } catch (_) {
         $('#preview-info').textContent = '预览失败，请确认后端 API 正常运行';
     }
+});
+
+// ─── 7. Correlation Matrix ───
+$('#btn-run-corr').addEventListener('click', async () => {
+    const vars = [...$$('#corr-var-checklist input:checked')].map(cb => cb.value);
+    if (vars.length < 2) {
+        alert('相关矩阵至少需要勾选 2 个变量');
+        return;
+    }
+    const btn = $('#btn-run-corr');
+    btn.setAttribute('disabled', 'true');
+    btn.textContent = '⏳ 计算中...';
+    try {
+        const qs = new URLSearchParams({
+            exclude_financial: $('#corr-exclude-fin').checked,
+            exclude_newly_listed: $('#corr-exclude-new').checked,
+            winsorize_pct: $('#corr-winsorize').checked ? 0.01 : 0,
+            variables: vars.join(','),
+        });
+        const res = await fetch(`${API}/api/correlation?${qs}`);
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || '计算失败');
+        }
+        const data = await res.json();
+
+        // Render heatmap table
+        const table = $('#corr-table');
+        const names = data.variables.map(v => v.name);
+        let html = '<thead><tr><th class="corr-row-head"></th>';
+        names.forEach(n => { html += `<th>${n}</th>`; });
+        html += '</tr></thead><tbody>';
+        data.matrix.forEach((row, i) => {
+            html += `<tr><th class="corr-row-head">${names[i]}</th>`;
+            row.forEach(v => {
+                if (v === null || v === undefined) {
+                    html += '<td class="corr-cell">—</td>';
+                } else {
+                    const abs = Math.min(Math.abs(v), 1);
+                    const bg = v >= 0
+                        ? `rgba(30, 58, 95, ${(0.08 + abs * 0.72).toFixed(3)})`
+                        : `rgba(178, 94, 0, ${(0.08 + abs * 0.72).toFixed(3)})`;
+                    const color = abs > 0.55 ? '#FFFFFF' : 'var(--text-primary)';
+                    html += `<td class="corr-cell" style="background:${bg}; color:${color};">${v.toFixed(3)}</td>`;
+                }
+            });
+            html += '</tr>';
+        });
+        html += '</tbody>';
+        table.innerHTML = html;
+
+        $('#corr-note').textContent = `Pearson 相关系数（N = ${data.n}），双侧 1% 缩尾后计算；蓝色 = 正相关，橙色 = 负相关`;
+        $('#corr-empty-state').style.display = 'none';
+        $('#corr-table-wrap').style.display = 'block';
+    } catch (err) {
+        alert('相关矩阵计算失败: ' + err.message);
+    } finally {
+        btn.removeAttribute('disabled');
+        btn.textContent = '📈 生成相关矩阵';
+    }
+});
+
+// ─── 8. Variable Dictionary ───
+let dictCache = [];
+
+async function loadDict() {
+    const tbody = $('#dict-tbody');
+    try {
+        const res = await fetch(`${API}/api/dict`);
+        if (!res.ok) throw new Error();
+        dictCache = await res.json();
+        dictLoaded = true;
+        renderDict('');
+    } catch (_) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--red);">变量字典加载失败，请确认 API 正常运行</td></tr>';
+    }
+}
+
+function renderDict(filter) {
+    const tbody = $('#dict-tbody');
+    const q = filter.trim().toLowerCase();
+    const rows = q
+        ? dictCache.filter(d =>
+            d.variable.toLowerCase().includes(q) ||
+            d.label.toLowerCase().includes(q) ||
+            d.category.toLowerCase().includes(q))
+        : dictCache;
+    if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">无匹配变量</td></tr>';
+        return;
+    }
+    tbody.innerHTML = '';
+    rows.forEach(d => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td style="font-family:var(--font-mono); font-weight:600; color:var(--accent);">${d.variable}</td>
+            <td>${d.label}</td>
+            <td><span class="badge-match badge-substring">${d.category}</span></td>
+            <td style="font-family:var(--font-mono); font-size:0.76rem; color:var(--text-secondary);">${d.formula}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+$('#dict-search-input').addEventListener('input', (e) => {
+    if (!dictLoaded) return;
+    renderDict(e.target.value);
 });
 
 // ─── Init ───
@@ -400,7 +517,7 @@ $('#btn-preview').addEventListener('click', async () => {
 
 
 // ─────────────────────────────────────────────
-// 7. Load Database Table Inventory
+// 9. Load Database Table Inventory
 // ─────────────────────────────────────────────
 async function loadInventory() {
     const tbody = $('#inventory-tbody');
@@ -453,24 +570,21 @@ async function loadInventory() {
 
 
 // ─────────────────────────────────────────────
-// 8. Drag and Drop File Upload
+// 10. Drag and Drop File Upload
 // ─────────────────────────────────────────────
 const dropzone = $('#upload-dropzone');
 const fileInput = $('#import-file-input');
 const btnImport = $('#btn-trigger-import');
 let selectedFile = null;
 
-// Click dropzone to select file
 dropzone.addEventListener('click', () => fileInput.click());
 
-// File input selection
 fileInput.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {
         handleFileSelection(e.target.files[0]);
     }
 });
 
-// Drag and drop event handlers
 dropzone.addEventListener('dragover', (e) => {
     e.preventDefault();
     dropzone.classList.add('dragover');
@@ -490,7 +604,6 @@ function handleFileSelection(file) {
     selectedFile = file;
     dropzone.classList.add('file-selected');
 
-    // Update dropzone UI
     const icon = dropzone.querySelector('.dropzone-icon');
     const text = dropzone.querySelector('.dropzone-text');
     const sub = dropzone.querySelector('.dropzone-sub');
@@ -499,10 +612,8 @@ function handleFileSelection(file) {
     text.innerHTML = `已选择文件: <span style="color:var(--accent-light); font-weight:600;">${file.name}</span>`;
     sub.textContent = `文件大小: ${(file.size / 1024 / 1024).toFixed(2)} MB | 点击或拖拽更换文件`;
 
-    // Auto-populate target table name if empty
     const tableNameInput = $('#import-table-name');
     if (!tableNameInput.value || tableNameInput.value.startsWith('ods.')) {
-        // Clean name to ods.filename
         const stem = file.name.substring(0, file.name.lastIndexOf('.')).toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/__+/g, '_').replace(/^_+|_+$/g, '');
         tableNameInput.value = `ods.${stem}`;
     }
@@ -512,7 +623,7 @@ function handleFileSelection(file) {
 
 
 // ─────────────────────────────────────────────
-// 9. File Upload API Submission
+// 11. File Upload API Submission
 // ─────────────────────────────────────────────
 btnImport.addEventListener('click', async () => {
     if (!selectedFile) return;
@@ -520,7 +631,6 @@ btnImport.addEventListener('click', async () => {
     const tableName = $('#import-table-name').value.trim();
     const varcharCols = $('#import-varchar-cols').value.trim();
 
-    // UI state
     btnImport.setAttribute('disabled', 'true');
     btnImport.innerHTML = `⏳ 正在导入中...`;
 
@@ -553,11 +663,9 @@ btnImport.addEventListener('click', async () => {
 
         const data = await res.json();
 
-        // Success Alert
         alertBox.className = 'alert-box success';
         alertBox.innerHTML = `<span>✅</span> <div><strong>导入成功！</strong> ${data.message}</div>`;
 
-        // Populate Summary
         $('#q-table-name').textContent = data.import_details.table;
         $('#q-total-rows').textContent = fmtInt(data.quality.total_rows);
 
@@ -571,7 +679,6 @@ btnImport.addEventListener('click', async () => {
             dupEl.style.color = 'var(--green)';
         }
 
-        // Populate Quality Details
         const qTbody = $('#quality-tbody');
         qTbody.innerHTML = '';
         data.quality.columns.forEach(col => {
@@ -590,7 +697,6 @@ btnImport.addEventListener('click', async () => {
             qTbody.appendChild(tr);
         });
 
-        // Populate Preview Table
         const pThead = $('#import-preview-thead');
         const pTbody = $('#import-preview-tbody');
 
@@ -606,14 +712,12 @@ btnImport.addEventListener('click', async () => {
             pTbody.appendChild(tr);
         });
 
-        // Refresh local database inventory
         loadInventory();
 
     } catch (err) {
         alertBox.className = 'alert-box error';
         alertBox.innerHTML = `<span>❌</span> <div><strong>导入失败！</strong> 发生错误: ${err.message}</div>`;
 
-        // Reset report card
         $('#q-table-name').textContent = '—';
         $('#q-total-rows').textContent = '—';
         $('#q-dup-rows').textContent = '—';
@@ -628,7 +732,7 @@ btnImport.addEventListener('click', async () => {
 
 
 // ─────────────────────────────────────────────
-// 10. Pipeline Runner Trigger
+// 12. Pipeline Runner Trigger
 // ─────────────────────────────────────────────
 const btnRunPipeline = $('#btn-run-pipeline');
 const pipelineAlert = $('#pipeline-status-alert');
@@ -656,7 +760,6 @@ btnRunPipeline.addEventListener('click', async () => {
         pipelineAlert.className = 'alert-box success';
         pipelineAlert.innerHTML = `<span>✅</span> <div><strong>数仓清洗成功！</strong> DWD 维度表、DWS 财务指标面板与 ADS 行业聚合集市已重构！${data.message}</div>`;
 
-        // Trigger generic UI refreshes to pull in the new data
         await checkApi();
         await loadStats();
         await loadDescriptive();
@@ -676,7 +779,7 @@ btnRunPipeline.addEventListener('click', async () => {
 
 
 // ─────────────────────────────────────────────
-// 11. Smart Entity Resolution & Alignment
+// 13. Smart Entity Resolution & Alignment
 // ─────────────────────────────────────────────
 const thresholdSlider = $('#align-threshold');
 const thresholdVal = $('#align-threshold-val');
@@ -688,14 +791,13 @@ if (thresholdSlider && thresholdVal) {
 }
 
 const btnRunAlign = $('#btn-run-align');
-let alignedResultsCache = null; // To cache results for CSV download
+let alignedResultsCache = null;
 
 if (btnRunAlign) {
     btnRunAlign.addEventListener('click', async () => {
         const namesInput = $('#align-names-input').value;
         const threshold = parseFloat(thresholdSlider.value);
 
-        // Parse names
         const names = namesInput.split(/[\n,]/).map(n => n.trim()).filter(n => n !== '');
 
         if (names.length === 0) {
@@ -703,7 +805,6 @@ if (btnRunAlign) {
             return;
         }
 
-        // UI states
         btnRunAlign.setAttribute('disabled', 'true');
         btnRunAlign.innerHTML = `⏳ 正在实体对齐中...`;
 
@@ -721,25 +822,21 @@ if (btnRunAlign) {
             if (!res.ok) throw new Error('接口对齐失败，请检查后端 API');
 
             const data = await res.json();
-            alignedResultsCache = data; // Cache
+            alignedResultsCache = data;
 
-            // Calculate stats
             const total = data.length;
             const matchedCount = data.filter(d => d.match_type !== 'No Match').length;
             const exactCount = data.filter(d => d.match_type === 'Current Exact Match' || d.match_type === 'Historical Exact Match').length;
             const successRate = total > 0 ? (matchedCount / total * 100).toFixed(1) + '%' : '0%';
 
-            // Show / Hide blocks
             emptyState.style.display = 'none';
             summaryRow.style.display = 'grid';
             resultsBlock.style.display = 'block';
 
-            // Update stats cards
             $('#align-stat-total').textContent = total;
             $('#align-stat-success').textContent = successRate;
             $('#align-stat-exact').textContent = exactCount;
 
-            // Render Table
             const tbody = $('#align-results-tbody');
             tbody.innerHTML = '';
 
@@ -793,8 +890,7 @@ if (btnDlAlignCsv) {
         e.preventDefault();
         if (!alignedResultsCache || alignedResultsCache.length === 0) return;
 
-        // Build CSV content
-        let csvContent = '﻿'; // BOM to prevent garbled characters in Excel
+        let csvContent = '﻿';
         csvContent += '原始输入名称,标准股票代码,标准公司名称,所属行业,对齐级别,匹配分数\n';
 
         alignedResultsCache.forEach(row => {
@@ -810,7 +906,6 @@ if (btnDlAlignCsv) {
             csvContent += `"${rawName}","${row.stkcd}","${compName}","${row.industry_category}","${levelText}",${row.score}\n`;
         });
 
-        // Trigger download
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');

@@ -20,6 +20,7 @@ WITH base_panel AS (
         f.assets,
         f.debt,
         f.equity,
+        f.retained_earnings,
         f.current_assets,
         f.current_liabilities,
         f.inventory,
@@ -83,13 +84,30 @@ growth AS (
         *,
         (revenue - LAG(revenue, 1) OVER w) / NULLIF(LAG(revenue, 1) OVER w, 0)     AS revenue_growth,
         (assets - LAG(assets, 1) OVER w) / NULLIF(LAG(assets, 1) OVER w, 0)        AS asset_growth,
-        (net_income - LAG(net_income, 1) OVER w) / NULLIF(LAG(net_income, 1) OVER w, 0) AS net_income_growth
+        (net_income - LAG(net_income, 1) OVER w) / NULLIF(LAG(net_income, 1) OVER w, 0) AS net_income_growth,
+        -- Altman Z 财务困境预警模型（适用于非金融企业，金融企业置 NULL）：
+        -- Z = 1.2X1 + 1.4X2 + 3.3X3 + 0.6X4 + 1.0X5
+        -- X1=营运资本/总资产  X2=留存收益/总资产  X3=EBIT/总资产  X4=股权市值/总负债  X5=营收/总资产
+        CASE WHEN industry_category != '金融业'
+             THEN 1.2 * (current_assets - current_liabilities) / NULLIF(assets, 0)
+                + 1.4 * retained_earnings / NULLIF(assets, 0)
+                + 3.3 * (operating_profit + interest_expense) / NULLIF(assets, 0)
+                + 0.6 * equity_mv / NULLIF(debt, 0)
+                + 1.0 * revenue / NULLIF(assets, 0)
+        END AS altman_z
     FROM ratios
     WINDOW w AS (PARTITION BY stkcd ORDER BY year)
 )
 -- 4. 多期滞后项 / 超前项（Stata 中 L.roa、L2.roa、F.roa 的 SQL 窗口函数实现）
 SELECT
     *,
+    -- Altman Z 风险分区：<1.81 危险区，1.81-2.99 灰色区，>2.99 安全区
+    CASE
+        WHEN altman_z IS NULL THEN NULL
+        WHEN altman_z < 1.81 THEN '危险区'
+        WHEN altman_z < 2.99 THEN '灰色区'
+        ELSE '安全区'
+    END AS altman_risk,
     LAG(roa, 1) OVER w       AS lag_roa,
     LAG(roa, 2) OVER w       AS lag2_roa,
     LAG(roe, 1) OVER w       AS lag_roe,

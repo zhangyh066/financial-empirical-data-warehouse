@@ -86,6 +86,7 @@ def generate_mock_data():
             lev = _clip(np.random.normal(p["lev"], 0.03), 0.05, 0.95)
             debt = assets * lev
             equity = assets - debt  # 勾稽：资产 = 负债 + 权益
+            retained_earnings = equity * np.random.uniform(0.35, 0.85)  # 留存收益（盈余公积+未分配利润）
 
             ca_ratio = _clip(np.random.normal(p["ca"], 0.03), 0.10, 0.95)
             current_assets = assets * ca_ratio
@@ -123,6 +124,7 @@ def generate_mock_data():
                 "F010101A": round(assets, 2),                  # 总资产
                 "F010201A": round(debt, 2),                    # 总负债
                 "F010301A": round(equity, 2),                  # 所有者权益合计
+                "F010401A": round(retained_earnings, 2),       # 留存收益（盈余公积+未分配利润）
                 "F010701A": round(current_assets, 2),          # 流动资产合计
                 "F010801A": round(current_liabilities, 2),     # 流动负债合计
                 "F011001A": round(inventory, 2),               # 存货

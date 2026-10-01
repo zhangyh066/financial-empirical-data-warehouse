@@ -23,8 +23,8 @@ from src.etl.import_raw import DataImporter
 # ─────────────────────────────────────────────
 app = FastAPI(
     title="EFDW Financial Data API",
-    description="企业财务实证数据仓库 — 面向财务实证研究的 RESTful API（缩尾/样本筛选/行业聚合/杜邦分析）。",
-    version="2.0.0"
+    description="企业财务实证数据仓库 — 面向财务实证研究的 RESTful API（缩尾/样本筛选/行业聚合/杜邦分析/Altman Z 预警/相关性矩阵）。",
+    version="2.1.0"
 )
 
 app.add_middleware(
@@ -68,46 +68,74 @@ def apply_sample_filters(df, year_min, year_max, exclude_financial, exclude_newl
 
 
 # ─────────────────────────────────────────────
-# 变量字典：DWS 面板中的数值型学术变量（五大能力分类）
+# 变量元数据中心：标签 / 所属能力分类 / 计算公式
+# （同时驱动 描述性统计、分布、导出校验、变量字典 API，保证口径唯一）
 # ─────────────────────────────────────────────
-NUMERIC_VARS = {
+VARIABLE_META = {
     # 规模与市场
-    "firm_size": "企业规模 Size (ln Assets)",
-    "leverage": "资产负债率 Lev",
-    "tobin_q": "托宾Q (Tobin's Q)",
+    "firm_size":        dict(label="企业规模 Size (ln Assets)",      category="规模与市场",   formula="LN(总资产)"),
+    "leverage":         dict(label="资产负债率 Lev",                  category="规模与市场",   formula="总负债 / 总资产"),
+    "tobin_q":          dict(label="托宾Q (Tobin's Q)",               category="规模与市场",   formula="(股权市值 + 总负债) / 总资产"),
     # 盈利能力
-    "roa": "总资产收益率 ROA",
-    "roe": "净资产收益率 ROE",
-    "gross_margin": "销售毛利率",
-    "net_margin": "销售净利率",
-    "operating_margin": "营业利润率",
+    "roa":              dict(label="总资产收益率 ROA",                category="盈利能力",     formula="净利润 / 总资产"),
+    "roe":              dict(label="净资产收益率 ROE",                category="盈利能力",     formula="净利润 / 所有者权益"),
+    "gross_margin":     dict(label="销售毛利率",                      category="盈利能力",     formula="(营业收入 - 营业成本) / 营业收入"),
+    "net_margin":       dict(label="销售净利率",                      category="盈利能力",     formula="净利润 / 营业收入"),
+    "operating_margin": dict(label="营业利润率",                      category="盈利能力",     formula="营业利润 / 营业收入"),
     # 成长性
-    "revenue_growth": "营业收入增长率",
-    "asset_growth": "总资产增长率",
-    "net_income_growth": "净利润增长率",
+    "revenue_growth":   dict(label="营业收入增长率",                  category="成长性",       formula="(营收ₜ - 营收ₜ₋₁) / 营收ₜ₋₁"),
+    "asset_growth":     dict(label="总资产增长率",                    category="成长性",       formula="(总资产ₜ - 总资产ₜ₋₁) / 总资产ₜ₋₁"),
+    "net_income_growth": dict(label="净利润增长率",                   category="成长性",       formula="(净利润ₜ - 净利润ₜ₋₁) / 净利润ₜ₋₁"),
     # 偿债能力
-    "current_ratio": "流动比率",
-    "quick_ratio": "速动比率",
-    "cash_ratio": "现金比率",
-    "interest_coverage": "利息保障倍数",
+    "current_ratio":    dict(label="流动比率",                        category="偿债能力",     formula="流动资产 / 流动负债"),
+    "quick_ratio":      dict(label="速动比率",                        category="偿债能力",     formula="(流动资产 - 存货) / 流动负债"),
+    "cash_ratio":       dict(label="现金比率",                        category="偿债能力",     formula="货币资金 / 流动负债"),
+    "interest_coverage": dict(label="利息保障倍数",                   category="偿债能力",     formula="(营业利润 + 利息费用) / 利息费用"),
     # 营运能力
-    "total_asset_turnover": "总资产周转率",
-    "inventory_turnover": "存货周转率",
-    "receivables_turnover": "应收账款周转率",
-    "cash_conversion_cycle": "现金转换周期 (天)",
+    "total_asset_turnover": dict(label="总资产周转率",                category="营运能力",     formula="营业收入 / 总资产"),
+    "inventory_turnover":   dict(label="存货周转率",                  category="营运能力",     formula="营业成本 / 存货"),
+    "receivables_turnover": dict(label="应收账款周转率",              category="营运能力",     formula="营业收入 / 应收账款"),
+    "cash_conversion_cycle": dict(label="现金转换周期 (天)",          category="营运能力",     formula="365/存货周转率 + 365/应收周转率 - 365/应付周转率"),
     # 现金流能力
-    "ocf_to_assets": "经营现金流/总资产",
-    # 多期滞后项 / 超前项
-    "lag_roa": "L.ROA (滞后一期)",
-    "lag2_roa": "L2.ROA (滞后两期)",
-    "lag_roe": "L.ROE (滞后一期)",
-    "lag_leverage": "L.Lev (滞后一期)",
-    "lag_revenue_growth": "L.营收增长 (滞后一期)",
-    "lead_roa": "F.ROA (超前一期)",
+    "ocf_to_assets":    dict(label="经营现金流/总资产",               category="现金流能力",   formula="经营活动现金流净额 / 总资产"),
+    # 财务风险预警
+    "altman_z":         dict(label="Altman Z 值（财务困境预警）",     category="财务风险预警", formula="1.2X₁ + 1.4X₂ + 3.3X₃ + 0.6X₄ + 1.0X₅（非金融企业适用）"),
+    # 多期滞后 / 超前项
+    "lag_roa":          dict(label="L.ROA (滞后一期)",                category="滞后与超前项", formula="LAG(roa, 1) OVER (PARTITION BY stkcd ORDER BY year)"),
+    "lag2_roa":         dict(label="L2.ROA (滞后两期)",               category="滞后与超前项", formula="LAG(roa, 2) OVER (PARTITION BY stkcd ORDER BY year)"),
+    "lag_roe":          dict(label="L.ROE (滞后一期)",                category="滞后与超前项", formula="LAG(roe, 1) OVER (PARTITION BY stkcd ORDER BY year)"),
+    "lag_leverage":     dict(label="L.Lev (滞后一期)",                category="滞后与超前项", formula="LAG(leverage, 1) OVER (PARTITION BY stkcd ORDER BY year)"),
+    "lag_revenue_growth": dict(label="L.营收增长 (滞后一期)",         category="滞后与超前项", formula="LAG(revenue_growth, 1) OVER (PARTITION BY stkcd ORDER BY year)"),
+    "lead_roa":         dict(label="F.ROA (超前一期)",                category="滞后与超前项", formula="LEAD(roa, 1) OVER (PARTITION BY stkcd ORDER BY year)"),
 }
+
+# 兼容旧代码：变量名 → 中文标签
+NUMERIC_VARS = {k: v["label"] for k, v in VARIABLE_META.items()}
+
+# 相关性矩阵默认变量（论文核心变量组合）
+DEFAULT_CORR_VARS = "roa,roe,leverage,firm_size,revenue_growth,current_ratio,total_asset_turnover,tobin_q"
 
 # 默认导出变量（回归常用组合）
 DEFAULT_EXPORT_VARS = "firm_size,leverage,roa,roe,revenue_growth,current_ratio,total_asset_turnover,tobin_q,lag_roa"
+
+
+def load_panel(year_min=2018, year_max=2022, exclude_financial=True,
+               exclude_newly_listed=False, winsorize_pct=0.0, variables=None):
+    """加载 DWS 面板并统一执行样本筛选（可选缩尾），返回 DataFrame"""
+    conn = get_conn()
+    try:
+        df = conn.execute("SELECT * FROM dws.firm_year_panel").fetchdf()
+    finally:
+        conn.close()
+    df = apply_sample_filters(df, year_min, year_max, exclude_financial, exclude_newly_listed)
+    if variables:
+        sel = [v for v in variables if v in df.columns]
+        df = df[sel]
+    if winsorize_pct > 0:
+        for v in df.columns:
+            if v in NUMERIC_VARS:
+                df[v] = winsorize(df[v], winsorize_pct)
+    return df
 
 
 # ─────────────────────────────────────────────
@@ -150,13 +178,7 @@ def get_descriptive(
     winsorize_pct: float = Query(default=0.01),
 ):
     """生成学术标准描述性统计表 (Table 1)"""
-    conn = get_conn()
-    try:
-        df = conn.execute("SELECT * FROM dws.firm_year_panel").fetchdf()
-    finally:
-        conn.close()
-
-    df = apply_sample_filters(df, year_min, year_max, exclude_financial, exclude_newly_listed)
+    df = load_panel(year_min, year_max, exclude_financial, exclude_newly_listed)
 
     results = []
     for col, label in NUMERIC_VARS.items():
@@ -183,7 +205,51 @@ def get_descriptive(
 
 
 # ─────────────────────────────────────────────
-# API: 3. Industry Distribution
+# API: 3. Variable Dictionary（变量数据字典）
+# ─────────────────────────────────────────────
+@app.get("/api/dict")
+def get_variable_dict():
+    """获取全部学术变量的中文标签、所属能力分类与计算公式"""
+    return [
+        {"variable": name, "label": meta["label"], "category": meta["category"], "formula": meta["formula"]}
+        for name, meta in VARIABLE_META.items()
+    ]
+
+
+# ─────────────────────────────────────────────
+# API: 4. Correlation Matrix（Pearson 相关性矩阵，论文 Table 3）
+# ─────────────────────────────────────────────
+@app.get("/api/correlation")
+def get_correlation(
+    year_min: int = Query(default=2018),
+    year_max: int = Query(default=2022),
+    exclude_financial: bool = Query(default=True),
+    exclude_newly_listed: bool = Query(default=False),
+    winsorize_pct: float = Query(default=0.01),
+    variables: str = Query(default=DEFAULT_CORR_VARS),
+):
+    """Pearson 相关系数矩阵（缩尾后计算），支撑论文相关性分析表"""
+    sel_vars = [v.strip() for v in variables.split(",") if v.strip() in NUMERIC_VARS]
+    if len(sel_vars) < 2:
+        raise HTTPException(status_code=400, detail="相关矩阵至少需要选择 2 个有效变量")
+
+    df = load_panel(year_min, year_max, exclude_financial, exclude_newly_listed,
+                    winsorize_pct=winsorize_pct, variables=sel_vars)
+    df = df.dropna()
+    if len(df) < 3:
+        raise HTTPException(status_code=400, detail="有效样本量不足（<3），无法计算相关系数")
+
+    corr = df[sel_vars].corr(method="pearson").round(3)
+    matrix = corr.where(pd.notna(corr), None).values.tolist()
+    return {
+        "n": int(len(df)),
+        "variables": [{"name": v, "label": NUMERIC_VARS[v]} for v in sel_vars],
+        "matrix": matrix,
+    }
+
+
+# ─────────────────────────────────────────────
+# API: 5. Industry Distribution
 # ─────────────────────────────────────────────
 @app.get("/api/industry")
 def get_industry_distribution(
@@ -206,7 +272,7 @@ def get_industry_distribution(
 
 
 # ─────────────────────────────────────────────
-# API: 4. Year-wise Observation Count
+# API: 6. Year-wise Observation Count
 # ─────────────────────────────────────────────
 @app.get("/api/yearly")
 def get_yearly_obs():
@@ -224,7 +290,7 @@ def get_yearly_obs():
 
 
 # ─────────────────────────────────────────────
-# API: 5. Variable Distribution (Histogram bins)
+# API: 7. Variable Distribution (Histogram bins)
 # ─────────────────────────────────────────────
 @app.get("/api/distribution")
 def get_distribution(
@@ -240,14 +306,7 @@ def get_distribution(
     if variable not in NUMERIC_VARS:
         raise HTTPException(status_code=400, detail=f"不支持的变量: {variable}")
 
-    conn = get_conn()
-    try:
-        df = conn.execute("SELECT * FROM dws.firm_year_panel").fetchdf()
-    finally:
-        conn.close()
-
-    df = apply_sample_filters(df, year_min, year_max, exclude_financial, exclude_newly_listed)
-
+    df = load_panel(year_min, year_max, exclude_financial, exclude_newly_listed)
     s = df[variable].dropna()
     if winsorize_pct > 0:
         s = winsorize(s, winsorize_pct)
@@ -264,7 +323,7 @@ def get_distribution(
 
 
 # ─────────────────────────────────────────────
-# API: 6. Company List
+# API: 8. Company List
 # ─────────────────────────────────────────────
 @app.get("/api/companies")
 def get_companies():
@@ -282,11 +341,11 @@ def get_companies():
 
 
 # ─────────────────────────────────────────────
-# API: 7. Company Detail（含杜邦分解与五大能力指标）
+# API: 9. Company Detail（含杜邦分解、五大能力指标与 Altman Z 预警）
 # ─────────────────────────────────────────────
 @app.get("/api/company/{stkcd}")
 def get_company_detail(stkcd: str):
-    """公司年度面板明细 + 杜邦三因子分解"""
+    """公司年度面板明细 + 杜邦三因子分解 + Altman Z 财务困境预警"""
     conn = get_conn()
     try:
         rows = conn.execute("""
@@ -296,7 +355,8 @@ def get_company_detail(stkcd: str):
                    current_ratio, quick_ratio, interest_coverage,
                    total_asset_turnover, inventory_turnover, receivables_turnover,
                    cash_conversion_cycle, ocf_to_assets, tobin_q,
-                   equity_multiplier, dupont_roe
+                   equity_multiplier, dupont_roe,
+                   altman_z, altman_risk
             FROM dws.firm_year_panel
             WHERE stkcd = ?
             ORDER BY year
@@ -322,7 +382,7 @@ def get_company_detail(stkcd: str):
 
 
 # ─────────────────────────────────────────────
-# API: 8. Export Dataset
+# API: 10. Export Dataset
 # ─────────────────────────────────────────────
 @app.get("/api/export/csv")
 def export_csv(
@@ -334,14 +394,7 @@ def export_csv(
     variables: str = Query(default=DEFAULT_EXPORT_VARS),
 ):
     """一键导出过滤后的 CSV 格式回归数据集"""
-    conn = get_conn()
-    try:
-        df = conn.execute("SELECT * FROM dws.firm_year_panel").fetchdf()
-    finally:
-        conn.close()
-
-    df = apply_sample_filters(df, year_min, year_max, exclude_financial, exclude_newly_listed)
-
+    df = load_panel(year_min, year_max, exclude_financial, exclude_newly_listed, winsorize_pct=0.0)
     sel_vars = [v.strip() for v in variables.split(",") if v.strip() in NUMERIC_VARS]
     if winsorize_pct > 0:
         for v in sel_vars:
@@ -372,14 +425,7 @@ def export_stata(
     variables: str = Query(default=DEFAULT_EXPORT_VARS),
 ):
     """一键导出过滤后的 Stata .dta 格式回归数据集（Stata 14+ 支持中文）"""
-    conn = get_conn()
-    try:
-        df = conn.execute("SELECT * FROM dws.firm_year_panel").fetchdf()
-    finally:
-        conn.close()
-
-    df = apply_sample_filters(df, year_min, year_max, exclude_financial, exclude_newly_listed)
-
+    df = load_panel(year_min, year_max, exclude_financial, exclude_newly_listed, winsorize_pct=0.0)
     sel_vars = [v.strip() for v in variables.split(",") if v.strip() in NUMERIC_VARS]
     if winsorize_pct > 0:
         for v in sel_vars:
@@ -402,7 +448,7 @@ def export_stata(
 
 
 # ─────────────────────────────────────────────
-# API: 9. Get Database Tables
+# API: 11. Get Database Tables
 # ─────────────────────────────────────────────
 @app.get("/api/tables")
 def get_tables():
@@ -435,7 +481,7 @@ def get_tables():
 
 
 # ─────────────────────────────────────────────
-# API: 10. File Upload and Data Import
+# API: 12. File Upload and Data Import
 # ─────────────────────────────────────────────
 @app.post("/api/import")
 def import_file_api(
@@ -513,7 +559,7 @@ def import_file_api(
 
 
 # ─────────────────────────────────────────────
-# API: 11. Run Data Cleaning & Panel Pipeline
+# API: 13. Run Data Cleaning & Panel Pipeline
 # ─────────────────────────────────────────────
 @app.post("/api/run-pipeline")
 def run_pipeline_api():
@@ -533,7 +579,7 @@ def run_pipeline_api():
 
 
 # ─────────────────────────────────────────────
-# API: 12. 4 级企业名称智能消歧
+# API: 14. 4 级企业名称智能消歧
 # ─────────────────────────────────────────────
 class ResolveRequest(BaseModel):
     names: list[str]

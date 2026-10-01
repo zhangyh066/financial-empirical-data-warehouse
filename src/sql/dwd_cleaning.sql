@@ -52,6 +52,7 @@ SELECT
     F010101A AS assets,                 -- 总资产
     F010201A AS debt,                   -- 总负债
     F010301A AS equity,                 -- 所有者权益合计
+    F010401A AS retained_earnings,      -- 留存收益（盈余公积 + 未分配利润）
     F010701A AS current_assets,         -- 流动资产合计
     F010801A AS current_liabilities,    -- 流动负债合计
     F011001A AS inventory,              -- 存货

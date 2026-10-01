@@ -456,6 +456,50 @@ tbody tr:hover { background: var(--bg-hover); }
     border-top: none;
 }
 
+/* Correlation Matrix & Altman Z Risk Badges */
+.corr-grid {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: var(--sp-5);
+}
+.corr-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+.corr-table th,
+.corr-table td {
+    border: 1px solid var(--border);
+    padding: 6px 8px;
+    text-align: right;
+    white-space: nowrap;
+}
+.corr-table thead th {
+    background: var(--bg-card);
+    font-weight: 600;
+    color: var(--accent);
+}
+.corr-row-head {
+    background: var(--bg-card);
+    font-weight: 600;
+    color: var(--accent);
+    text-align: left !important;
+}
+.corr-cell {
+    font-variant-numeric: tabular-nums;
+}
+.risk-badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+.risk-danger { background: #FDE8E8; color: #C0392B; }
+.risk-gray   { background: #FFF5E6; color: #B25E00; }
+.risk-safe   { background: #E6F4EA; color: #059669; }
+
 /* Preview */
 .preview-toolbar {
     display: flex;

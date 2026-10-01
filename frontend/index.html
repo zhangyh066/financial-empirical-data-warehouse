@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EFDW — 企业财务实证数据仓库系统</title>
-    <meta name="description" content="Enterprise Financial Data Warehouse: 企业财务实证数据仓库——财务三表指标计算、杜邦分解、4级名称消歧与一键导出 Stata/CSV 终端">
+    <meta name="description" content="Enterprise Financial Data Warehouse: 企业财务实证数据仓库——财务三表指标计算、杜邦分解、Altman Z 预警、相关性矩阵、4级名称消歧与一键导出 Stata/CSV 终端">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
@@ -48,6 +48,14 @@
             <button class="nav-tab" data-tab="align">
                 <span class="tab-num">05</span>
                 <span class="tab-label">智能对齐</span>
+            </button>
+            <button class="nav-tab" data-tab="corr">
+                <span class="tab-num">06</span>
+                <span class="tab-label">相关矩阵</span>
+            </button>
+            <button class="nav-tab" data-tab="dict">
+                <span class="tab-num">07</span>
+                <span class="tab-label">变量字典</span>
             </button>
         </div>
     </nav>
@@ -132,6 +140,7 @@
                             <option value="current_ratio">流动比率</option>
                             <option value="total_asset_turnover">总资产周转率</option>
                             <option value="interest_coverage">利息保障倍数</option>
+                            <option value="altman_z">Altman Z 值</option>
                             <option value="firm_size">Size (企业规模)</option>
                             <option value="tobin_q">Tobin's Q (托宾Q)</option>
                         </select>
@@ -151,7 +160,7 @@
             <div class="section-block">
                 <div class="section-header">
                     <h2>Company Lookup</h2>
-                    <p class="section-sub">输入股票代码或企业名称进行检索，查看财务指标时序与杜邦分解</p>
+                    <p class="section-sub">输入股票代码或企业名称进行检索，查看财务指标时序、杜邦分解与 Altman Z 预警</p>
                 </div>
                 <div class="search-bar">
                     <input type="text" id="company-search-input" class="input-text" placeholder="输入代码或名称，例如 000002 或 万科">
@@ -189,6 +198,8 @@
                                 <th>营收增长</th>
                                 <th>资产负债率</th>
                                 <th>流动比率</th>
+                                <th>Altman Z</th>
+                                <th>风险分区</th>
                             </tr>
                         </thead>
                         <tbody id="company-panel-tbody"></tbody>
@@ -300,6 +311,9 @@
                                 <div class="var-group-label">现金流能力</div>
                                 <label class="checkbox-label"><input type="checkbox" value="ocf_to_assets"><span>经营现金流/总资产</span></label>
 
+                                <div class="var-group-label">财务风险预警</div>
+                                <label class="checkbox-label"><input type="checkbox" value="altman_z"><span>Altman Z 值（财务困境预警）</span></label>
+
                                 <div class="var-group-label">多期滞后 / 超前项</div>
                                 <label class="checkbox-label"><input type="checkbox" value="lag_roa"><span>L.ROA (滞后一期)</span></label>
                                 <label class="checkbox-label"><input type="checkbox" value="lag2_roa"><span>L2.ROA (滞后两期)</span></label>
@@ -347,7 +361,7 @@
                     <div class="pipeline-title-group">
                         <span class="pipeline-tag">数仓控制台</span>
                         <h2>一键运行清洗与财务指标计算 Pipeline</h2>
-                        <p class="section-sub">导入完 ODS 贴源层数据（公司基本信息、财务三表、曾用名历史）后，点击此按钮可一键运行后端 SQL 清洗：构建 DWD 维度表与 DWS 财务指标面板宽表（含多期滞后项），并生成 ADS 行业聚合数据集市。</p>
+                        <p class="section-sub">导入完 ODS 贴源层数据（公司基本信息、财务三表、曾用名历史）后，点击此按钮可一键运行后端 SQL 清洗：构建 DWD 维度表与 DWS 财务指标面板宽表（含多期滞后项与 Altman Z 预警），并生成 ADS 行业聚合数据集市。</p>
                     </div>
                     <button id="btn-run-pipeline" class="btn btn-pipeline">
                         <span class="pipeline-icon">⚙️</span> 运行清洗 Pipeline
@@ -573,6 +587,109 @@
                     </div>
                 </div>
 
+            </div>
+
+        </section>
+
+        <!-- ═══ Tab 6: Correlation Matrix ═══ -->
+        <section class="tab-panel" id="panel-corr">
+
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Correlation Matrix &mdash; Pearson 相关性矩阵</h2>
+                    <p class="section-sub">实证论文 Table 3 标配：缩尾后计算变量间 Pearson 相关系数（蓝色正相关 / 橙色负相关，颜色越深绝对值越大）</p>
+                </div>
+
+                <div class="corr-grid">
+                    <!-- Left: Config -->
+                    <div class="corr-config">
+                        <fieldset class="config-group">
+                            <legend>参与变量（至少勾选 2 个）</legend>
+                            <div class="var-checklist" id="corr-var-checklist">
+                                <label class="checkbox-label"><input type="checkbox" value="roa" checked><span>ROA (总资产收益率)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="roe" checked><span>ROE (净资产收益率)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="leverage" checked><span>Lev (资产负债率)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="firm_size" checked><span>Size (企业规模)</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="revenue_growth" checked><span>营收增长率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="current_ratio" checked><span>流动比率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="total_asset_turnover" checked><span>总资产周转率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="tobin_q" checked><span>Tobin's Q</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="gross_margin"><span>销售毛利率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="net_margin"><span>销售净利率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="asset_growth"><span>总资产增长率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="quick_ratio"><span>速动比率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="interest_coverage"><span>利息保障倍数</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="ocf_to_assets"><span>经营现金流/总资产</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="altman_z"><span>Altman Z 值</span></label>
+                            </div>
+                        </fieldset>
+
+                        <fieldset class="config-group" style="margin-top:var(--sp-4);">
+                            <legend>样本与处理</legend>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="corr-exclude-fin" checked>
+                                <span>剔除金融行业公司</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="corr-exclude-new" checked>
+                                <span>剔除上市不足一年的公司</span>
+                            </label>
+                            <label class="checkbox-label" style="margin-top:var(--sp-2);">
+                                <input type="checkbox" id="corr-winsorize" checked>
+                                <span>双侧 1% 缩尾后计算（学术惯例）</span>
+                            </label>
+                        </fieldset>
+
+                        <div style="margin-top:var(--sp-5); display:flex; justify-content:flex-end;">
+                            <button id="btn-run-corr" class="btn btn-primary" style="padding:var(--sp-3) var(--sp-6);">
+                                📈 生成相关矩阵
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Right: Matrix -->
+                    <div class="corr-output">
+                        <div class="corr-empty-state" id="corr-empty-state" style="border:2px dashed var(--border-dark); border-radius:var(--radius); padding:var(--sp-10) var(--sp-6); text-align:center; background:var(--bg-card); display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:320px;">
+                            <span style="font-size:2.8rem; display:block; margin-bottom:var(--sp-3); opacity:0.85;">📈</span>
+                            <h3 style="font-size:0.95rem; font-weight:600; color:var(--text-primary); margin-bottom:var(--sp-2);">等待生成相关性矩阵</h3>
+                            <p style="font-size:0.78rem; color:var(--text-muted); line-height:1.6; max-width:320px; margin:0 auto;">在左侧勾选要分析的财务变量，点击生成按钮即可得到 Pearson 相关系数热力矩阵。</p>
+                        </div>
+                        <div class="table-wrap" id="corr-table-wrap" style="display:none; overflow-x:auto;">
+                            <table class="corr-table" id="corr-table"></table>
+                            <p class="preview-note" id="corr-note"></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ═══ Tab 7: Variable Dictionary ═══ -->
+        <section class="tab-panel" id="panel-dict">
+
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Variable Dictionary &mdash; 变量数据字典</h2>
+                    <p class="section-sub">数仓全部学术变量的中文标签、所属财务能力分类与 SQL 计算公式（写论文变量定义表 Table 1 必备）</p>
+                </div>
+                <div class="search-bar" style="margin-bottom:var(--sp-4);">
+                    <input type="text" id="dict-search-input" class="input-text" placeholder="按变量名 / 中文标签 / 分类搜索，例如 roa 或 盈利">
+                </div>
+                <div class="table-wrap" style="max-height:560px; overflow-y:auto;">
+                    <table id="dict-table">
+                        <thead>
+                            <tr>
+                                <th class="col-var">变量名 (Variable)</th>
+                                <th>中文标签 (Label)</th>
+                                <th>能力分类 (Category)</th>
+                                <th>计算公式 (Formula)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dict-tbody">
+                            <tr><td colspan="4" style="text-align:center; color:var(--text-muted);">正在加载变量字典...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
         </section>
