@@ -118,6 +118,14 @@ DEFAULT_CORR_VARS = "roa,roe,leverage,firm_size,revenue_growth,current_ratio,tot
 # 默认导出变量（回归常用组合）
 DEFAULT_EXPORT_VARS = "firm_size,leverage,roa,roe,revenue_growth,current_ratio,total_asset_turnover,tobin_q,lag_roa"
 
+# 行业对标分析的核心指标（direction: higher = 越高越优，lower = 越低越优）
+BENCHMARK_VARS = [
+    ("roa", "higher"), ("roe", "higher"), ("gross_margin", "higher"), ("net_margin", "higher"),
+    ("revenue_growth", "higher"), ("leverage", "lower"), ("current_ratio", "higher"),
+    ("interest_coverage", "higher"), ("total_asset_turnover", "higher"), ("ocf_to_assets", "higher"),
+    ("tobin_q", "higher"), ("altman_z", "higher"),
+]
+
 
 def load_panel(year_min=2018, year_max=2022, exclude_financial=True,
                exclude_newly_listed=False, winsorize_pct=0.0, variables=None):
@@ -249,7 +257,62 @@ def get_correlation(
 
 
 # ─────────────────────────────────────────────
-# API: 5. Industry Distribution
+# API: 5. Industry Benchmarking（行业对标分析）
+# ─────────────────────────────────────────────
+@app.get("/api/benchmark/{stkcd}")
+def get_benchmark(stkcd: str):
+    """行业对标：公司核心指标 vs 同行业-年度中位数/均值，及行业内分位数"""
+    conn = get_conn()
+    try:
+        df = conn.execute("SELECT * FROM dws.firm_year_panel").fetchdf()
+    finally:
+        conn.close()
+
+    firm = df[df["stkcd"] == stkcd]
+    if firm.empty:
+        raise HTTPException(status_code=404, detail=f"未找到公司 {stkcd}")
+
+    info = firm.iloc[0]
+    indicators = []
+    for var, direction in BENCHMARK_VARS:
+        if var not in df.columns:
+            continue
+        # 同行业-年度的中位数 / 均值 / 分位数（窗口化计算，无需循环）
+        grp = df.groupby(["industry_category", "year"])[var]
+        df[f"__med_{var}"] = grp.transform("median")
+        df[f"__mean_{var}"] = grp.transform("mean")
+        df[f"__pct_{var}"] = grp.rank(pct=True)
+
+        sub = df[df["stkcd"] == stkcd][["year", var, f"__med_{var}", f"__mean_{var}", f"__pct_{var}"]]
+        values = [
+            {
+                "year": int(r["year"]),
+                "company": None if pd.isna(r[var]) else round(float(r[var]), 4),
+                "industry_median": None if pd.isna(r[f"__med_{var}"]) else round(float(r[f"__med_{var}"]), 4),
+                "industry_mean": None if pd.isna(r[f"__mean_{var}"]) else round(float(r[f"__mean_{var}"]), 4),
+                "percentile": None if pd.isna(r[f"__pct_{var}"]) else round(float(r[f"__pct_{var}"]), 4),
+            }
+            for _, r in sub.iterrows()
+        ]
+        indicators.append({
+            "variable": var,
+            "label": NUMERIC_VARS.get(var, var),
+            "category": VARIABLE_META.get(var, {}).get("category", ""),
+            "direction": direction,
+            "values": values,
+        })
+
+    return {
+        "stkcd": info["stkcd"],
+        "company_name": info["company_name"],
+        "industry_category": info["industry_category"],
+        "industry_code": info["industry_code"],
+        "indicators": indicators,
+    }
+
+
+# ─────────────────────────────────────────────
+# API: 6. Industry Distribution
 # ─────────────────────────────────────────────
 @app.get("/api/industry")
 def get_industry_distribution(
@@ -481,7 +544,66 @@ def get_tables():
 
 
 # ─────────────────────────────────────────────
-# API: 12. File Upload and Data Import
+# API: 12. Financial Data Quality（财务勾稽关系校验报告）
+# ─────────────────────────────────────────────
+QUALITY_CHECK_COUNT = 10  # 与 ads_quality.sql 中的检查项数量保持一致
+
+
+@app.get("/api/quality")
+def get_quality_report():
+    """读取财务勾稽校验报告（ads.data_quality_report），并汇总通过率"""
+    conn = get_conn()
+    try:
+        n_firm_years = conn.execute("SELECT COUNT(*) FROM dwd.fact_financial").fetchone()[0]
+        rows = conn.execute("""
+            SELECT stkcd, company_name, year, check_item, severity, detail
+            FROM ads.data_quality_report
+            ORDER BY stkcd, year, check_item
+        """).fetchall()
+    finally:
+        conn.close()
+
+    violations = [{"stkcd": r[0], "company_name": r[1], "year": r[2],
+                   "check_item": r[3], "severity": r[4], "detail": r[5]} for r in rows]
+    n_fail = sum(1 for v in violations if v["severity"] == "FAIL")
+    n_warn = sum(1 for v in violations if v["severity"] == "WARN")
+    total_checks = n_firm_years * QUALITY_CHECK_COUNT
+    n_pass = total_checks - len(violations)
+    return {
+        "n_firm_years": n_firm_years,
+        "checks_per_firm_year": QUALITY_CHECK_COUNT,
+        "total_checks": total_checks,
+        "passed": n_pass,
+        "warned": n_warn,
+        "failed": n_fail,
+        "pass_rate": round(n_pass / total_checks, 4) if total_checks else None,
+        "violations": violations,
+    }
+
+
+@app.post("/api/run-quality")
+def run_quality_check():
+    """手动触发财务勾稽关系校验（导入新数据后无需重跑全量 Pipeline）"""
+    try:
+        conn = duckdb.connect(str(DB_PATH))
+        try:
+            with open("src/sql/ads_quality.sql", "r", encoding="utf-8") as f:
+                conn.execute(f.read())
+        finally:
+            conn.close()
+        report = get_quality_report()
+        return {
+            "success": True,
+            "message": f"勾稽校验完成：共 {report['total_checks']} 项检查，通过 {report['passed']} 项，"
+                       f"警告 {report['warned']} 项，失败 {report['failed']} 项。",
+            "summary": {k: report[k] for k in ("total_checks", "passed", "warned", "failed", "pass_rate")},
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"勾稽校验运行失败: {str(e)}")
+
+
+# ─────────────────────────────────────────────
+# API: 13. File Upload and Data Import
 # ─────────────────────────────────────────────
 @app.post("/api/import")
 def import_file_api(

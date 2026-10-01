@@ -500,6 +500,23 @@ tbody tr:hover { background: var(--bg-hover); }
 .risk-gray   { background: #FFF5E6; color: #B25E00; }
 .risk-safe   { background: #E6F4EA; color: #059669; }
 
+/* Benchmark percentile bar */
+.pct-bar {
+    width: 110px;
+    height: 6px;
+    background: #EDF2F7;
+    border-radius: 3px;
+    overflow: hidden;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+.pct-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+}
+
 /* Preview */
 .preview-toolbar {
     display: flex;

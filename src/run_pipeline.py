@@ -18,6 +18,7 @@ def run_pipeline():
         ("DWD", "src/sql/dwd_cleaning.sql", "DWD 维度表与明细事实表"),
         ("DWS", "src/sql/dws_panel.sql", "DWS 企业-年度财务面板宽表"),
         ("ADS", "src/sql/ads_marts.sql", "ADS 行业聚合应用数据集市"),
+        ("ADS", "src/sql/ads_quality.sql", "ADS 财务勾稽关系校验报告"),
     ]
 
     for layer, sql_path, desc in sql_steps:

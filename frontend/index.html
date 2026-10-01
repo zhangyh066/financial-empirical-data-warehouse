@@ -225,6 +225,31 @@
                     </div>
                 </div>
 
+                <!-- 行业对标分析 -->
+                <div style="margin-top:24px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
+                        <h3 style="font-size:0.88rem; font-weight:600; color:var(--accent); margin:0;">行业对标分析 (Industry Benchmarking) &mdash; 公司 vs 同行业年度中位数</h3>
+                        <select id="benchmark-year-select" class="input-select" style="min-width:120px;"></select>
+                    </div>
+                    <div class="table-wrap">
+                        <table id="benchmark-table">
+                            <thead>
+                                <tr>
+                                    <th>指标 (Variable)</th>
+                                    <th>公司值</th>
+                                    <th>行业中位数</th>
+                                    <th>差距</th>
+                                    <th>行业内分位</th>
+                                    <th>优劣方向</th>
+                                </tr>
+                            </thead>
+                            <tbody id="benchmark-tbody">
+                                <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">检索公司后自动加载行业对标数据</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div class="chart-container" style="max-width:700px;margin-top:24px;">
                     <canvas id="chart-company-trend"></canvas>
                 </div>
@@ -432,12 +457,53 @@
                                     <tr><td colspan="3" class="text-center" style="font-family:var(--font-sans);color:var(--text-muted);text-align:center;">正在加载数据库结构...</td></tr>
                                 </tbody>
                             </table>
+                    <!-- Data Quality Console Section -->
+                    <div class="section-block" style="margin-top: var(--sp-5);">
+                        <div class="section-header">
+                            <h2>Data Quality Console</h2>
+                            <p class="section-sub">财务勾稽关系自动校验（资产=负债+权益、流动资产构成、科目非负等 10 项会计学恒等式检查）</p>
+                        </div>
+                        <div id="quality-summary" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:var(--sp-3); margin-bottom:var(--sp-4);">
+                            <div style="border:1px solid var(--border); padding:var(--sp-3); border-radius:var(--radius-sm); text-align:center;">
+                                <span style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; display:block;">总检查项</span>
+                                <span id="q-total-checks" style="font-family:var(--font-mono); font-size:1.1rem; font-weight:600; display:block; margin-top:var(--sp-1);">—</span>
+                            </div>
+                            <div style="border:1px solid var(--border); padding:var(--sp-3); border-radius:var(--radius-sm); text-align:center;">
+                                <span style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; display:block;">通过 (PASS)</span>
+                                <span id="q-passed" style="font-family:var(--font-mono); font-size:1.1rem; font-weight:600; color:var(--green); display:block; margin-top:var(--sp-1);">—</span>
+                            </div>
+                            <div style="border:1px solid var(--border); padding:var(--sp-3); border-radius:var(--radius-sm); text-align:center;">
+                                <span style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; display:block;">警告 (WARN)</span>
+                                <span id="q-warned" style="font-family:var(--font-mono); font-size:1.1rem; font-weight:600; color:#B25E00; display:block; margin-top:var(--sp-1);">—</span>
+                            </div>
+                            <div style="border:1px solid var(--border); padding:var(--sp-3); border-radius:var(--radius-sm); text-align:center;">
+                                <span style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; display:block;">失败 (FAIL)</span>
+                                <span id="q-failed" style="font-family:var(--font-mono); font-size:1.1rem; font-weight:600; color:var(--red); display:block; margin-top:var(--sp-1);">—</span>
+                            </div>
+                        </div>
+                        <div id="quality-banner" class="alert-box" style="display:none; margin-bottom:var(--sp-4);"></div>
+                        <div class="import-action-row" style="margin-bottom: var(--sp-4); display: flex; justify-content: flex-end;">
+                            <button id="btn-run-quality" class="btn btn-primary" style="padding:var(--sp-2) var(--sp-5);">
+                                🧪 运行勾稽校验
+                            </button>
+                        </div>
+                        <div class="table-wrap" id="quality-table-wrap" style="display:none; max-height:320px; overflow-y:auto;">
+                            <table class="quality-table">
+                                <thead>
+                                    <tr>
+                                        <th>代码</th>
+                                        <th>公司</th>
+                                        <th>年度</th>
+                                        <th>检查项</th>
+                                        <th>级别</th>
+                                        <th style="text-align:left;">问题详情</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="quality-tbody"></tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
-
-                <!-- Right Column: Results & Quality Checks -->
-                <div class="import-right">
                     <div class="section-block" id="import-result-placeholder" style="height:100%; display:flex; align-items:center; justify-content:center; text-align:center; min-height:400px;">
                         <div class="placeholder-content" style="padding:var(--sp-6); max-width:400px; margin:0 auto;">
                             <span class="placeholder-icon" style="font-size:3rem; display:block; margin-bottom:var(--sp-3);">📊</span>

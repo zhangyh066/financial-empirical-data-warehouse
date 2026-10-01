@@ -78,31 +78,31 @@ def generate_mock_data():
 
             # ── 成长演化 ──
             g_rev = _clip(np.random.normal(p["g"], 0.12), -0.30, 0.55)
-            revenue = revenue * (1 + g_rev)
+            revenue = round(revenue * (1 + g_rev), 2)
             g_assets = _clip(np.random.normal(0.06, 0.08), -0.10, 0.28)
-            assets = assets * (1 + g_assets)
+            assets = round(assets * (1 + g_assets), 2)
 
-            # ── 资产负债表 ──
+            # ── 资产负债表（逐级取整，保证 资产=负债+权益 等勾稽关系精确到分）──
             lev = _clip(np.random.normal(p["lev"], 0.03), 0.05, 0.95)
-            debt = assets * lev
-            equity = assets - debt  # 勾稽：资产 = 负债 + 权益
-            retained_earnings = equity * np.random.uniform(0.35, 0.85)  # 留存收益（盈余公积+未分配利润）
+            debt = round(assets * lev, 2)
+            equity = round(assets - debt, 2)  # 勾稽：资产 = 负债 + 权益
+            retained_earnings = round(equity * np.random.uniform(0.35, 0.85), 2)  # 留存收益（盈余公积+未分配利润）
 
             ca_ratio = _clip(np.random.normal(p["ca"], 0.03), 0.10, 0.95)
-            current_assets = assets * ca_ratio
+            current_assets = round(assets * ca_ratio, 2)
             cl_ratio = _clip(np.random.normal(p["cl"], 0.05), 0.10, 0.95)
-            current_liabilities = debt * cl_ratio
+            current_liabilities = round(debt * cl_ratio, 2)
 
-            inventory = current_assets * _clip(np.random.normal(p["inv"], 0.02), 0.0, 0.35)
-            accounts_receivable = min(
+            inventory = round(current_assets * _clip(np.random.normal(p["inv"], 0.02), 0.0, 0.35), 2)
+            accounts_receivable = round(min(
                 revenue * _clip(np.random.normal(p["ar"], 0.03), 0.01, 0.60),
                 current_assets * 0.45,  # 保证货币资金为正
-            )
-            cash = current_assets - inventory - accounts_receivable
-            accounts_payable = min(
+            ), 2)
+            cash = round(current_assets - inventory - accounts_receivable, 2)
+            accounts_payable = round(min(
                 (revenue * (1 - p["gm"])) * _clip(np.random.normal(p["ap"], 0.03), 0.05, 0.70),
                 current_liabilities * 0.70,
-            )
+            ), 2)
 
             # ── 利润表 ──
             gm = _clip(np.random.normal(p["gm"], 0.03), 0.05, 0.90)

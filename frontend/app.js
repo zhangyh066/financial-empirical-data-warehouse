@@ -41,6 +41,7 @@ $$('.nav-tab').forEach(tab => {
         $(`#panel-${tab.dataset.tab}`).classList.add('active');
         if (tab.dataset.tab === 'import') {
             loadInventory();
+            loadQuality();
         }
         if (tab.dataset.tab === 'dict' && !dictLoaded) {
             loadDict();
@@ -341,10 +342,70 @@ async function loadCompanyDetail(stkcd) {
                 }
             }
         });
+
+        // 行业对标分析面板
+        loadBenchmark(stkcd);
     } catch (_) {}
 }
 // Expose to inline onclick
 window.loadCompanyDetail = loadCompanyDetail;
+
+// ─── 5b. Industry Benchmarking（行业对标分析） ───
+let benchmarkCache = null;
+
+async function loadBenchmark(stkcd) {
+    const tbody = $('#benchmark-tbody');
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">正在加载行业对标数据...</td></tr>';
+    try {
+        const res = await fetch(`${API}/api/benchmark/${stkcd}`);
+        if (!res.ok) throw new Error();
+        benchmarkCache = await res.json();
+        const years = benchmarkCache.indicators.length ? benchmarkCache.indicators[0].values.map(v => v.year) : [];
+        const sel = $('#benchmark-year-select');
+        sel.innerHTML = years.map(y => `<option value="${y}">${y} 年</option>`).join('');
+        sel.value = years[years.length - 1];
+        renderBenchmark(years[years.length - 1]);
+    } catch (_) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--red);">行业对标数据加载失败</td></tr>';
+    }
+}
+
+function renderBenchmark(year) {
+    if (!benchmarkCache) return;
+    const tbody = $('#benchmark-tbody');
+    tbody.innerHTML = '';
+    benchmarkCache.indicators.forEach(ind => {
+        const v = ind.values.find(x => x.year === Number(year));
+        const tr = document.createElement('tr');
+        if (!v || v.company === null || v.industry_median === null) {
+            tr.innerHTML = `<td style="text-align:left;">${ind.label}</td><td colspan="5" style="text-align:center; color:var(--text-muted);">该企业本年度不适用（如金融业的 Altman Z）</td>`;
+            tbody.appendChild(tr);
+            return;
+        }
+        const gap = v.company - v.industry_median;
+        const pct = Math.round((v.percentile ?? 0) * 100);
+        const isGood = ind.direction === 'lower' ? gap < 0 : gap > 0;
+        const gapColor = Math.abs(gap) < 1e-9 ? 'var(--text-secondary)' : (isGood ? 'var(--green)' : 'var(--red)');
+        const gapText = (gap > 0 ? '+' : '') + gap.toFixed(4);
+        const dirBadge = ind.direction === 'lower'
+            ? '<span class="badge-match badge-fuzzy">↓ 越低越优</span>'
+            : '<span class="badge-match badge-current">↑ 越高越优</span>';
+        tr.innerHTML = `
+            <td style="text-align:left;">${ind.label}</td>
+            <td style="font-weight:600;">${v.company.toFixed(4)}</td>
+            <td>${v.industry_median.toFixed(4)}</td>
+            <td style="color:${gapColor}; font-weight:600;">${gapText}</td>
+            <td>
+                <div class="pct-bar"><div class="pct-fill" style="width:${pct}%"></div></div>
+                <span style="font-size:0.72rem; color:var(--text-muted);">${pct}%</span>
+            </td>
+            <td>${dirBadge}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+$('#benchmark-year-select').addEventListener('change', (e) => renderBenchmark(Number(e.target.value)));
 
 // ─── 6. Export Preview & Download ───
 function getExportParams() {
@@ -729,6 +790,87 @@ btnImport.addEventListener('click', async () => {
         btnImport.innerHTML = `🚀 开始导入 DuckDB`;
     }
 });
+
+
+// ─────────────────────────────────────────────
+// 11b. Financial Data Quality Console（财务勾稽校验台）
+// ─────────────────────────────────────────────
+async function loadQuality() {
+    try {
+        const res = await fetch(`${API}/api/quality`);
+        if (!res.ok) throw new Error();
+        renderQuality(await res.json());
+    } catch (_) {
+        $('#quality-banner').style.display = 'flex';
+        $('#quality-banner').className = 'alert-box error';
+        $('#quality-banner').innerHTML = '<span>❌</span> <div>质检报告加载失败，请确认 API 正常运行</div>';
+    }
+}
+
+function renderQuality(report) {
+    $('#q-total-checks').textContent = fmtInt(report.total_checks);
+    $('#q-passed').textContent = fmtInt(report.passed);
+    $('#q-warned').textContent = fmtInt(report.warned);
+    $('#q-failed').textContent = fmtInt(report.failed);
+
+    const banner = $('#quality-banner');
+    banner.style.display = 'flex';
+    if (report.failed === 0 && report.warned === 0) {
+        banner.className = 'alert-box success';
+        banner.innerHTML = `<span>✅</span> <div><strong>全部通过！</strong> ${report.n_firm_years} 个企业-年度 × ${report.checks_per_firm_year} 项勾稽检查全部满足，通过率 100%。接入真实数据后此处将自动暴露违规明细。</div>`;
+        $('#quality-table-wrap').style.display = 'none';
+    } else {
+        banner.className = 'alert-box error' ;
+        banner.innerHTML = `<span>⚠️</span> <div><strong>发现 ${report.failed + report.warned} 项违规</strong>（通过率 ${(report.pass_rate * 100).toFixed(1)}%），明细如下，请核查数据源。</div>`;
+        const tbody = $('#quality-tbody');
+        tbody.innerHTML = '';
+        report.violations.forEach(v => {
+            const tr = document.createElement('tr');
+            const sevBadge = v.severity === 'FAIL'
+                ? '<span class="risk-badge risk-danger">FAIL</span>'
+                : '<span class="risk-badge risk-gray">WARN</span>';
+            tr.innerHTML = `
+                <td style="font-family:var(--font-mono); font-weight:600;">${v.stkcd}</td>
+                <td>${v.company_name}</td>
+                <td>${v.year}</td>
+                <td style="text-align:left;">${v.check_item}</td>
+                <td>${sevBadge}</td>
+                <td style="text-align:left; font-size:0.76rem;">${v.detail}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+        $('#quality-table-wrap').style.display = 'block';
+    }
+}
+
+const btnRunQuality = $('#btn-run-quality');
+if (btnRunQuality) {
+    btnRunQuality.addEventListener('click', async () => {
+        btnRunQuality.setAttribute('disabled', 'true');
+        btnRunQuality.textContent = '⏳ 校验中...';
+        try {
+            const res = await fetch(`${API}/api/run-quality`, { method: 'POST' });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || '校验运行失败');
+            }
+            const data = await res.json();
+            renderQuality({
+                ...data.summary,
+                n_firm_years: Math.round(data.summary.total_checks / 10),
+                checks_per_firm_year: 10,
+                violations: [],
+            });
+            // 违规明细重新拉取完整报告
+            await loadQuality();
+        } catch (err) {
+            alert('勾稽校验失败: ' + err.message);
+        } finally {
+            btnRunQuality.removeAttribute('disabled');
+            btnRunQuality.textContent = '🧪 运行勾稽校验';
+        }
+    });
+}
 
 
 // ─────────────────────────────────────────────
