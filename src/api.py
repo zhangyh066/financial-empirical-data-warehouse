@@ -813,3 +813,13 @@ def resolve_company_names(request: ResolveRequest):
         })
 
     return results
+
+
+# ─────────────────────────────────────────────
+# 前端静态托管：同源访问 http://127.0.0.1:8000/ 即看板（/api/* 路由优先）
+# ─────────────────────────────────────────────
+from fastapi.staticfiles import StaticFiles
+
+_FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+if _FRONTEND_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIR), html=True), name="frontend")

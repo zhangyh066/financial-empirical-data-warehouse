@@ -202,19 +202,14 @@ python src/inspect_db.py
 
 ---
 
-## 🖥️ 启动后端服务
+## 🖥️ 一键启动（推荐）
 
-**步骤 1：先切换到项目根目录**
+**双击项目根目录下的 `启动看板.bat`**：自动启动后端服务并打开浏览器，访问 http://127.0.0.1:8000/ 即是数据看板（API 文档在 http://127.0.0.1:8000/docs）。关闭该窗口即停止服务。
 
-```bash
-cd enterprise-financial-data-warehouse
-```
-
-> ⚠️ **这一步最容易漏掉**。如果不在这个目录下执行，Python 找不到 `src.api` 模块。
-
-**步骤 2：启动 FastAPI 服务**
+也可以命令行手动启动：
 
 ```bash
+cd enterprise-financial-data-warehouse   # 必须先在项目根目录，否则 Python 找不到 src.api 模块
 uvicorn src.api:app --port 8000
 ```
 
@@ -228,15 +223,9 @@ INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 
 ## 🌐 前端看板使用
 
-后端运行后，**直接用浏览器打开**：
+后端运行后，浏览器访问 **http://127.0.0.1:8000/**（前端由后端同源托管，无需单独打开 HTML 文件）。
 
-```
-frontend/index.html
-```
-
-> 文件路径：`frontend/index.html`
-
-前端默认连接 `http://127.0.0.1:8000`，如果你换了端口，打开 `frontend/app.js` 第 12 行修改。
+> 直接双击 `frontend/index.html` 用 `file://` 打开也可以，前端会自动回退连接 `http://127.0.0.1:8000`。
 
 ### 前端功能一览
 
@@ -445,10 +434,10 @@ python src/etl/fetch_real_data.py   # 或 --skip-enrich 快速版；可随时重
 python src/etl/import_raw.py
 python src/run_pipeline.py
 
-# ── 每次启动后端 ──
+# ── 每次启动（双击 启动看板.bat 即可，或手动）──
 cd enterprise-financial-data-warehouse
 uvicorn src.api:app --port 8000
-# 然后浏览器打开 frontend/index.html
+# 浏览器访问 http://127.0.0.1:8000/
 
 # ── 刷新行情数据（如新年报发布后）──
 rm -rf data/raw/akshare_cache       # 清缓存重抓（不清则增量续用缓存）

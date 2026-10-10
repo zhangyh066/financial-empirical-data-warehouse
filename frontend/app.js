@@ -4,7 +4,7 @@
  * Connects to FastAPI backend at localhost:8000.
  */
 
-const API = 'http://127.0.0.1:8000';
+const API = location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
 
 // ─── Utility ───
 function $(sel)  { return document.querySelector(sel); }
