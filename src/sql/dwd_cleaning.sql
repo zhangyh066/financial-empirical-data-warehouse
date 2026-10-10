@@ -48,27 +48,27 @@ SELECT
     CAST(Accper AS DATE) AS acc_date,
     -- 从 Accper 提取会计年度 (例如 '2022-12-31' 转换为 2022)
     EXTRACT(YEAR FROM CAST(Accper AS DATE))::INTEGER AS year,
-    -- 资产负债表
-    F010101A AS assets,                 -- 总资产
-    F010201A AS debt,                   -- 总负债
-    F010301A AS equity,                 -- 所有者权益合计
-    F010401A AS retained_earnings,      -- 留存收益（盈余公积 + 未分配利润）
-    F010701A AS current_assets,         -- 流动资产合计
-    F010801A AS current_liabilities,    -- 流动负债合计
-    F011001A AS inventory,              -- 存货
-    F011101A AS accounts_receivable,    -- 应收账款
-    F011201A AS cash,                   -- 货币资金
-    F011301A AS accounts_payable,       -- 应付账款
+    -- 资产负债表（TRY_CAST：真实数据中个别列可能整列为空被识别为文本，容错转为数值）
+    TRY_CAST(F010101A AS DOUBLE) AS assets,           -- 总资产
+    TRY_CAST(F010201A AS DOUBLE) AS debt,             -- 总负债
+    TRY_CAST(F010301A AS DOUBLE) AS equity,           -- 所有者权益合计
+    TRY_CAST(F010401A AS DOUBLE) AS retained_earnings, -- 留存收益（盈余公积 + 未分配利润）
+    TRY_CAST(F010701A AS DOUBLE) AS current_assets,   -- 流动资产合计
+    TRY_CAST(F010801A AS DOUBLE) AS current_liabilities, -- 流动负债合计
+    TRY_CAST(F011001A AS DOUBLE) AS inventory,        -- 存货
+    TRY_CAST(F011101A AS DOUBLE) AS accounts_receivable, -- 应收账款
+    TRY_CAST(F011201A AS DOUBLE) AS cash,             -- 货币资金
+    TRY_CAST(F011301A AS DOUBLE) AS accounts_payable, -- 应付账款
     -- 利润表
-    F020101A AS revenue,                -- 营业总收入
-    F020201A AS operating_cost,         -- 营业成本
-    F020301A AS operating_profit,       -- 营业利润
-    F020401A AS interest_expense,       -- 利息费用
-    F030101A AS net_income,             -- 净利润
+    TRY_CAST(F020101A AS DOUBLE) AS revenue,          -- 营业总收入
+    TRY_CAST(F020201A AS DOUBLE) AS operating_cost,   -- 营业成本
+    TRY_CAST(F020301A AS DOUBLE) AS operating_profit, -- 营业利润
+    TRY_CAST(F020401A AS DOUBLE) AS interest_expense, -- 利息费用
+    TRY_CAST(F030101A AS DOUBLE) AS net_income,       -- 净利润
     -- 现金流量表
-    F040101A AS ocf,                    -- 经营活动产生的现金流量净额
+    TRY_CAST(F040101A AS DOUBLE) AS ocf,              -- 经营活动产生的现金流量净额
     -- 市场数据
-    F100101C AS equity_mv               -- 股权市值
+    TRY_CAST(F100101C AS DOUBLE) AS equity_mv         -- 股权市值
 FROM ods.financial_raw
 WHERE
     -- 过滤非年底报表（实证论文通常只使用12月31日的年报数据，过滤掉一季报、半年报）

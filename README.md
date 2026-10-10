@@ -6,6 +6,7 @@
 
 ## 🌟 课程项目核心亮点
 
+- **真实数据**：内置 akshare 全市场抓取管线（`src/etl/fetch_real_data.py`），一键拉取 **5,200+ 家沪深 A 股上市公司 2018-2025 年报真实数据**（财务三表 + 年末总市值 + 上市/行业信息，交易所官网 + 东方财富 + 新浪财经多源交叉），全程磁盘缓存断点续传，无需 CSMAR/Wind 账号即可开展实证研究。
 - **架构设计**：采用规范数仓建模思想，独立搭建 **ODS（贴源层）→ DWD（明细层）→ DWS（服务层）→ ADS（应用层）** 四层架构；ADS 层落地为行业-年度聚合集市与全市场年度概览表，实现原始只读数据到高度聚合服务数据的清晰解耦。
 - **ETL 管线**：基于 **Python + DuckDB** 构建高性能数据流，覆盖财务三大报表核心科目（资产、负债、权益、留存收益、营收、成本、利润、现金流等），利用 SQL 窗口函数计算**盈利能力（ROA/ROE/毛利率）、成长性（营收/资产增长率）、偿债能力（流动比率/利息保障倍数）、营运能力（周转率/现金转换周期）** 五大类 20+ 企业核心财务指标，并内置**杜邦分解因子**、**Altman Z 财务困境预警模型**与**多期滞后项**（L / L2 / F）；同步执行**财务勾稽关系自动校验**（资产=负债+权益等 10 项会计学恒等式检查），千万级财务数据查询响应达毫秒级。
 - **API 开发**：使用 **FastAPI** 开发 **18 个核心业务接口**，集成**数据缩尾（Winsorize）、动态样本筛选（剔除金融业 / 剔除上市不足一年新股）、行业聚合统计、行业对标分析（分位数排名）、Pearson 相关性矩阵、财务勾稽质量校验、变量数据字典**等学术实证逻辑，支持在线海量样本分析。
@@ -67,7 +68,8 @@ enterprise-financial-data-warehouse/
 │   ├── inspect_db.py               #   快速查看数据库内容
 │   ├── etl/
 │   │   ├── import_raw.py           #   通用数据导入引擎（支持 CSV/Excel/Parquet/Stata/SAS/SPSS）
-│   │   └── mock_data.py            #   生成模拟 CSMAR 财务三表数据
+│   │   ├── fetch_real_data.py      #   akshare 全市场真实数据抓取器（全 A 股 2018-2025，断点续传）
+│   │   └── mock_data.py            #   生成模拟 CSMAR 财务三表数据（离线演示用）
 │   └── sql/
 │       ├── dwd_cleaning.sql        #   SQL：清洗 ODS → 构建 DWD 维度表和财务明细表
 │       ├── dws_panel.sql           #   SQL：生成 DWS 企业-年度财务指标面板宽表
@@ -160,18 +162,21 @@ pip install pandas polars duckdb pyarrow fastapi uvicorn python-multipart
 
 > 已安装的包会自动跳过，不必担心重复安装。
 
-### 2. 初始化数据库 & 生成模拟数据
+### 2. 初始化数据库 & 拉取真实数据
 
 ```bash
 cd enterprise-financial-data-warehouse
 python src/initialize_db.py
+
+# 真实数据（推荐）：akshare 全市场 A 股 2018-2025 年报，约 5,200 家
+python src/etl/fetch_real_data.py                # 全量（含新浪明细补充，约 1 小时）
+python src/etl/fetch_real_data.py --skip-enrich  # 快速版（约 10 分钟，流动比率等 4 项为 NULL）
+
+# 或仅生成 6 家公司的模拟数据用于离线演示
 python src/etl/mock_data.py
 ```
 
-执行后会：
-- 创建四层 Schema：`ods` / `dwd` / `dws` / `ads`
-- 在 `data/warehouse/` 下生成 `financial_warehouse.db`
-- 在 `data/raw/` 下生成 3 张模拟数据表（公司信息、财务三表、曾用名历史）
+抓取脚本全程带磁盘缓存与断点续传（`data/raw/akshare_cache/`），中断后重跑同一命令即可续抓。
 
 ### 3. 导入数据到 ODS 层 & 运行清洗管线
 
@@ -181,7 +186,7 @@ python src/run_pipeline.py
 ```
 
 执行后会：
-- 将 3 张模拟表导入 ODS 贴源层（原始文件自动归档到 `data/raw/imported/`）
+- 将 3 张数据表（公司信息、财务三表、曾用名）导入 ODS 贴源层（原始文件自动归档到 `data/raw/imported/`）
 - 执行 `dwd_cleaning.sql`：翻译字段名、构建公司维度表、过滤年报
 - 执行 `dws_panel.sql`：拼表、计算五大能力 20+ 财务指标 + 杜邦分解 + 多期滞后项
 - 执行 `ads_marts.sql`：生成行业-年度聚合集市与全市场年度概览
@@ -389,7 +394,29 @@ reg roa lag_roa lag2_roa firm_size leverage i.year, cluster(stkcd)
 
 ---
 
-## 📋 模拟数据说明
+## 📋 数据说明（真实数据）
+
+当前仓库内置数据由 `src/etl/fetch_real_data.py` 通过 akshare 抓取的**全市场 A 股真实数据**：
+
+- **覆盖范围**：约 5,200 家沪深 A 股上市公司 × 2018-2025 年年报，共 41,000+ 条公司-年度观测
+- **数据来源**：沪深京交易所官网（公司清单/上市日期/行业）、东方财富数据中心（财务三表简表、年末总市值）、新浪财经（流动资产/流动负债/留存收益/利息费用明细）
+- **曾用名表**：当前以现名建档（akshare 无全市场批量曾用名接口），消歧演示可用 `mock_data.py` 的样例数据
+
+依赖安装：`pip install akshare`
+
+### 数据口径说明
+
+| 字段 | 来源 | 口径 |
+|------|------|------|
+| 财务三表主体字段 | 东方财富（按报告期全市场批量） | 年报合并报表，单位：元 |
+| 流动资产/流动负债/留存收益/利息费用 | 新浪财经（逐股全量报表） | 留存收益 = 盈余公积 + 未分配利润 |
+| 股权市值 | 东方财富估值分析 | 每年 12 月最后一个交易日总市值 |
+| 行业门类 | 深交所/北交所官方证监会门类；上交所公司由东财行业名近似映射 | 用于"剔除金融业"等门类级筛选 |
+
+已知限制：东财批量接口不含北交所财务数据（北交所公司仅保留在公司维度表）；已退市公司无上市日期信息；`--skip-enrich` 快速模式下流动比率/速动比率/现金比率/利息保障倍数/Altman Z 为 NULL。
+
+<details>
+<summary>旧版模拟数据说明（mock_data.py，仅用于离线演示）</summary>
 
 内置模拟数据包含 **6 家 A 股上市公司 × 2018-2022 年共 30 条观测**，覆盖财务三大报表：
 
@@ -402,18 +429,19 @@ reg roa lag_roa lag2_roa firm_size leverage i.year, cluster(stkcd)
 | `002594` | 比亚迪 | 制造业(C37) | 高成长高周转 |
 | `600028` | 中国石化 | 采矿业(B06) | 重资产中杠杆 |
 
-> 数据由行业画像参数生成（满足 资产=负债+权益 等勾稽关系），仅用于演示流程。正式研究请使用 CSMAR/Wind 真实数据替换。
+> 数据由行业画像参数生成（满足 资产=负债+权益 等勾稽关系），仅用于离线演示流程。
+</details>
 
 ---
 
 ## 🔄 日常使用流程速查
 
 ```bash
-# ── 第一次安装 ──
+# ── 第一次安装（真实数据）──
 cd enterprise-financial-data-warehouse
-pip install pandas polars duckdb pyarrow fastapi uvicorn python-multipart
+pip install pandas polars duckdb pyarrow fastapi uvicorn python-multipart akshare
 python src/initialize_db.py
-python src/etl/mock_data.py
+python src/etl/fetch_real_data.py   # 或 --skip-enrich 快速版；可随时重跑续抓
 python src/etl/import_raw.py
 python src/run_pipeline.py
 
@@ -422,8 +450,10 @@ cd enterprise-financial-data-warehouse
 uvicorn src.api:app --port 8000
 # 然后浏览器打开 frontend/index.html
 
-# ── 导入新数据后 ──
-python src/etl/import_raw.py --scan data/raw
+# ── 刷新行情数据（如新年报发布后）──
+rm -rf data/raw/akshare_cache       # 清缓存重抓（不清则增量续用缓存）
+python src/etl/fetch_real_data.py
+python src/etl/import_raw.py
 python src/run_pipeline.py
 
 # ── 导出回归数据 ──
