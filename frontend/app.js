@@ -214,7 +214,7 @@ function renderCompanyList(filter = '') {
     let results = allCompanies;
     if (q) {
         results = allCompanies.filter(c =>
-            c.stkcd.includes(q) || c.company_name.toLowerCase().includes(q)
+            c.stkcd.includes(q) || (c.company_name || '').toLowerCase().includes(q)
         );
     }
     if (results.length === 0) {
@@ -227,7 +227,7 @@ function renderCompanyList(filter = '') {
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td style="font-family:var(--font-mono);">${c.stkcd}</td>
-            <td>${c.company_name}</td>
+            <td>${c.company_name || '—'}</td>
             <td>${c.industry_category}</td>
             <td><button class="btn btn-primary" onclick="loadCompanyDetail('${c.stkcd}')">查看</button></td>
         `;

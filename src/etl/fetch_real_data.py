@@ -478,9 +478,13 @@ def build_outputs(start_year: int, end_year: int, use_enrich: bool, enrich_worke
     fin = fin[FIN_COLS].sort_values(["Stkcd", "Accper"])
 
     # ── 公司信息表 ──
-    latest_year = max(years)
-    names_em = (stmts[latest_year][["Stkcd", "Comnam_em"]]
-                .dropna(subset=["Comnam_em"]).drop_duplicates("Stkcd"))
+    # 名称取该公司在全部年份三表中最近一次出现的简称（退市股也有名字，避免 NULL）
+    name_frames = [stmts[y][["Stkcd", "Comnam_em"]].assign(_y=y) for y in years]
+    names_em = (pd.concat(name_frames, ignore_index=True)
+                  .dropna(subset=["Comnam_em"])
+                  .sort_values("_y")
+                  .groupby("Stkcd", as_index=False)
+                  .last()[["Stkcd", "Comnam_em"]])
     info = pd.DataFrame({"Stkcd": all_codes})
     info = info.merge(base[["Stkcd", "Comnam", "Listdt", "Indcd"]], on="Stkcd", how="left")
     info = info.merge(names_em, on="Stkcd", how="left")
