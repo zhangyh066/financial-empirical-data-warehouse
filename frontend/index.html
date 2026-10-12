@@ -22,6 +22,7 @@
             <div class="header-status" id="api-status">
                 <span class="status-dot"></span>
                 <span class="status-text">Connecting…</span>
+                <span class="header-data-info" id="header-data-info"></span>
             </div>
         </div>
     </header>
@@ -62,6 +63,34 @@
 
     <!-- ─── Main Content ─── -->
     <main id="main-content">
+
+        <!-- ═══ 空库/服务未就绪 新手引导卡片 ═══ -->
+        <div class="onboarding-card" id="onboarding-card" style="display:none;">
+            <h2 id="onboarding-title">👋 欢迎使用 EFDW 企业财务实证数据仓库</h2>
+            <p class="onboarding-lead" id="onboarding-lead"></p>
+            <ol class="onboarding-steps" id="onboarding-steps">
+                <li>
+                    <strong>① 准备数据</strong>
+                    <p>把 CSMAR/Wind 下载的 Excel/CSV 放入 <code>data/raw/pending/</code> 目录；或在「数据导入」页底部展开「高级操作」，点击 🔄 更新数据 自动抓取 akshare 全市场 A 股真实数据（约 10-60 分钟）。</p>
+                </li>
+                <li>
+                    <strong>② 运行清洗 Pipeline</strong>
+                    <p>命令行执行 <code>python src/etl/import_raw.py</code> 再执行 <code>python src/run_pipeline.py</code>；或在「数据导入」页点击「⚙️ 运行清洗 Pipeline」按钮，自动构建 DWD / DWS / ADS 四层数据。</p>
+                </li>
+                <li>
+                    <strong>③ 开始分析</strong>
+                    <p>刷新本页面，即可使用样本概览、企业检索、数据导出、相关矩阵等全部功能。</p>
+                </li>
+            </ol>
+            <div class="onboarding-cmd" id="onboarding-cmd">
+                <p>首次安装关键命令（详见 README.md）：</p>
+                <pre>pip install -r requirements.txt
+python src/initialize_db.py
+python src/etl/fetch_real_data.py --skip-enrich   # 快速版抓取（约 10 分钟）
+python src/etl/import_raw.py
+python src/run_pipeline.py</pre>
+            </div>
+        </div>
 
         <!-- ═══ Tab 1: Overview ═══ -->
         <section class="tab-panel active" id="panel-overview">
@@ -173,6 +202,8 @@
                         <tbody id="company-list-tbody"></tbody>
                     </table>
                 </div>
+                <!-- 搜索空状态 / 加载态提示 -->
+                <div class="company-empty-state" id="company-empty-state" style="display:none;"></div>
             </div>
 
             <!-- Company detail card -->
@@ -277,6 +308,7 @@
                                 <label>截止年份</label>
                                 <input type="number" id="exp-year-max" class="input-number" value="2022" min="2000" max="2030">
                             </div>
+                            <p class="field-note" style="font-size:0.72rem; color:var(--text-muted); margin-top:var(--sp-1);">默认值自动读取库内实际年份范围（页面加载后填充）</p>
                         </fieldset>
 
                         <fieldset class="config-group">
@@ -370,6 +402,10 @@
                             <a id="btn-dl-csv" class="btn btn-download btn-download-alt" href="#">
                                 <span class="dl-icon">↓</span> 下载 CSV
                             </a>
+                            <label class="checkbox-label" style="font-size:0.78rem; color:var(--text-secondary);">
+                                <input type="checkbox" id="exp-include-meta" checked>
+                                <span>同时下载样本配方说明（_meta.txt，含筛选口径与行数，便于复现）</span>
+                            </label>
                         </div>
                     </div>
                 </div>
@@ -393,6 +429,18 @@
                     </button>
                 </div>
                 <div id="pipeline-status-alert" class="alert-box" style="display:none;"></div>
+
+                <!-- 高级操作：更新数据（重抓 + 全量重建，耗时较长，默认折叠防误触） -->
+                <details class="advanced-ops">
+                    <summary>高级操作（重抓数据，慎用）</summary>
+                    <div class="advanced-ops-body">
+                        <p class="advanced-ops-note">「更新数据」将重新抓取 akshare 行情并全量重建数仓，耗时 10-60 分钟，期间数据库会被占用。日常仅需运行上方的清洗 Pipeline。</p>
+                        <button id="btn-refresh-data" class="btn btn-subtle">
+                            🔄 更新数据（全量重抓 + 重建）
+                        </button>
+                    </div>
+                </details>
+                <div id="refresh-status-alert" class="alert-box" style="display:none;"></div>
             </div>
 
             <div class="import-grid">

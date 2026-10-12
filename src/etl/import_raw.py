@@ -24,12 +24,20 @@ EFDW 通用数据导入引擎
 """
 
 import os
+import sys
 import glob
 import argparse
 from pathlib import Path
 from datetime import datetime
 
 import duckdb
+
+# 兼容 `python src/etl/import_raw.py` 直接运行：把项目根目录加入模块搜索路径
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+from src.config import DB_PATH, IMPORTED_DIR, PENDING_DIR, RAW_DIR, get_logger, is_valid_table_name
+
+logger = get_logger("efdw.import")
 
 
 # ─────────────────────────────────────────────
@@ -65,7 +73,7 @@ FORMAT_MAP = {
 class DataImporter:
     """通用学术数据导入器"""
 
-    def __init__(self, db_path: str = "data/warehouse/financial_warehouse.db"):
+    def __init__(self, db_path: str = str(DB_PATH)):
         self.db_path = db_path
         self._import_log = []  # 导入日志
 
@@ -90,7 +98,7 @@ class DataImporter:
         finally:
             conn.close()
 
-    def archive_file(self, file_path: str, dest_dir: str = "data/raw/imported") -> str:
+    def archive_file(self, file_path: str, dest_dir: str = str(IMPORTED_DIR)) -> str:
         """成功导入后，将文件归档到已导入文件夹"""
         import shutil
         from pathlib import Path
@@ -115,6 +123,17 @@ class DataImporter:
         except Exception as e:
             print(f"  [警告] 归档文件 {src.name} 失败: {e}")
             return file_path
+
+    def _record(self, result: dict) -> None:
+        """记录导入日志：内存留存 + 持久化到 logs/efdw.log"""
+        self._import_log.append(result)
+        if "error" in result:
+            logger.error("导入失败: %s -> %s 错误: %s", result.get("file"), result.get("table"), result["error"])
+        elif result.get("skipped"):
+            logger.info("跳过导入（表已存在）: %s -> %s", result.get("file", result.get("pattern", "?")), result["table"])
+        else:
+            logger.info("导入成功: %s -> %s（%s 行）",
+                        result.get("file", result.get("pattern", "?")), result["table"], result.get("rows"))
 
     # ─────────────────────────────────────────
     # 核心：单文件导入
@@ -146,6 +165,9 @@ class DataImporter:
         返回:
             {"table": 表名, "rows": 行数, "columns": 列数, "file": 文件路径, "skipped": 是否跳过}
         """
+        if not is_valid_table_name(table_name):
+            raise ValueError(f"非法表名: {table_name!r}（仅允许字母/数字/下划线，可带一层 schema 前缀）")
+
         file_path = str(file_path)
         fmt = self._detect_format(file_path)
 
@@ -173,7 +195,7 @@ class DataImporter:
                 "skipped": True,
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
-            self._import_log.append(result)
+            self._record(result)
             return result
 
         conn = duckdb.connect(self.db_path)
@@ -218,7 +240,7 @@ class DataImporter:
                 "format": fmt,
                 "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
-            self._import_log.append(result)
+            self._record(result)
             return result
 
         finally:
@@ -272,6 +294,7 @@ class DataImporter:
             except Exception as e:
                 error_info = {"table": table_name, "file": str(file_path), "error": str(e)}
                 print(f"  [ERROR] {file_path.name:40s} -> 导入失败: {e}")
+                self._record(error_info)
                 results.append(error_info)
 
         return results
@@ -300,6 +323,9 @@ class DataImporter:
         返回:
             {"table": 表名, "rows": 总行数, "files": 文件数, "skipped": 是否跳过}
         """
+        if not is_valid_table_name(table_name):
+            raise ValueError(f"非法表名: {table_name!r}（仅允许字母/数字/下划线，可带一层 schema 前缀）")
+
         files = sorted(glob.glob(pattern))
         if not files:
             raise FileNotFoundError(f"没有匹配的文件: {pattern}")
@@ -322,7 +348,7 @@ class DataImporter:
                 "pattern": pattern,
                 "skipped": True,
             }
-            self._import_log.append(result)
+            self._record(result)
             return result
 
         conn = duckdb.connect(self.db_path)
@@ -362,7 +388,7 @@ class DataImporter:
                 "files": len(files),
                 "pattern": pattern,
             }
-            self._import_log.append(result)
+            self._record(result)
             return result
 
         finally:
@@ -600,15 +626,15 @@ class DataImporter:
 
 def import_default_tables(skip_existing: bool = False, archive: bool = True):
     """导入项目预设的标准 ODS 表，并自动处理分类归档"""
-    db_path = "data/warehouse/financial_warehouse.db"
+    db_path = str(DB_PATH)
 
     if not os.path.exists(db_path):
         print(f"[错误] 数据库文件 {db_path} 不存在，请先运行 python src/initialize_db.py")
         return
 
     # 自动创建待导入 (pending) 和已导入 (imported) 目录结构
-    pending_dir = "data/raw/pending"
-    imported_dir = "data/raw/imported"
+    pending_dir = str(PENDING_DIR)
+    imported_dir = str(IMPORTED_DIR)
     os.makedirs(pending_dir, exist_ok=True)
     os.makedirs(imported_dir, exist_ok=True)
 
@@ -632,7 +658,7 @@ def import_default_tables(skip_existing: bool = False, archive: bool = True):
         # 2. data/raw/<filename> （原本的根目录，保证向后兼容）
         # 3. data/raw/imported/<filename> （已归档目录，用于重刷数据）
         pending_path = os.path.join(pending_dir, filename)
-        root_path = os.path.join("data/raw", filename)
+        root_path = os.path.join(str(RAW_DIR), filename)
         imported_path = os.path.join(imported_dir, filename)
 
         resolved_path = None
@@ -716,7 +742,7 @@ def main():
 
     args = parser.parse_args()
 
-    db_path = "data/warehouse/financial_warehouse.db"
+    db_path = str(DB_PATH)
     if not os.path.exists(db_path):
         print(f"[错误] 数据库文件 {db_path} 不存在，请先运行 python src/initialize_db.py")
         return

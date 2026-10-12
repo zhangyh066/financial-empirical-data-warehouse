@@ -6,7 +6,11 @@ Run: uvicorn src.api:app --port 8000
 """
 import io
 import shutil
+import subprocess
+import sys
 import tempfile
+import threading
+from datetime import datetime
 from pathlib import Path
 
 import duckdb
@@ -16,7 +20,13 @@ from fastapi import FastAPI, Query, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from src.config import (
+    DB_PATH, FRONTEND_DIR, PROJECT_ROOT, SQL_DIR, TMP_DIR,
+    get_logger, is_valid_table_name,
+)
 from src.etl.import_raw import DataImporter
+
+logger = get_logger("efdw.api")
 
 # ─────────────────────────────────────────────
 # App Bootstrap
@@ -27,14 +37,13 @@ app = FastAPI(
     version="2.1.0"
 )
 
+# 前端由后端同源托管，CORS 仅放行本机回环地址（本工具仅限本机使用，勿暴露到局域网/公网）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-DB_PATH = Path("data/warehouse/financial_warehouse.db")
 
 
 def get_conn():
@@ -55,16 +64,6 @@ def winsorize(series: pd.Series, pct: float) -> pd.Series:
     lo = series.quantile(pct)
     hi = series.quantile(1 - pct)
     return series.clip(lower=lo, upper=hi)
-
-
-def apply_sample_filters(df, year_min, year_max, exclude_financial, exclude_newly_listed):
-    """统一的动态样本筛选逻辑：年份窗口 / 剔除金融业 / 剔除上市不足一年的新股"""
-    df = df[(df["year"] >= year_min) & (df["year"] <= year_max)].copy()
-    if exclude_financial:
-        df = df[df["industry_category"] != "金融业"]
-    if exclude_newly_listed and "list_year" in df.columns:
-        df = df[df["year"] > df["list_year"]]
-    return df
 
 
 # ─────────────────────────────────────────────
@@ -109,7 +108,7 @@ VARIABLE_META = {
     "lead_roa":         dict(label="F.ROA (超前一期)",                category="滞后与超前项", formula="LEAD(roa, 1) OVER (PARTITION BY stkcd ORDER BY year)"),
 }
 
-# 兼容旧代码：变量名 → 中文标签
+# 变量名 → 中文标签的便捷映射（由 VARIABLE_META 派生，供统计/校验等接口使用）
 NUMERIC_VARS = {k: v["label"] for k, v in VARIABLE_META.items()}
 
 # 相关性矩阵默认变量（论文核心变量组合）
@@ -127,15 +126,48 @@ BENCHMARK_VARS = [
 ]
 
 
-def load_panel(year_min=2018, year_max=2022, exclude_financial=True,
-               exclude_newly_listed=False, winsorize_pct=0.0, variables=None):
-    """加载 DWS 面板并统一执行样本筛选（可选缩尾），返回 DataFrame"""
+def get_db_year_range() -> tuple[int, int]:
+    """查询库内 DWS 面板实际年份范围，作为各接口缺省的研究窗口"""
     conn = get_conn()
     try:
-        df = conn.execute("SELECT * FROM dws.firm_year_panel").fetchdf()
+        row = conn.execute("SELECT MIN(year), MAX(year) FROM dws.firm_year_panel").fetchone()
+        return int(row[0]), int(row[1])
     finally:
         conn.close()
-    df = apply_sample_filters(df, year_min, year_max, exclude_financial, exclude_newly_listed)
+
+
+def resolve_year_window(year_min: int | None, year_max: int | None) -> tuple[int, int]:
+    """缺省年份补全：未指定时取库内实际 MIN/MAX(year)，与 export.py 行为一致"""
+    if year_min is None or year_max is None:
+        db_min, db_max = get_db_year_range()
+        year_min = db_min if year_min is None else year_min
+        year_max = db_max if year_max is None else year_max
+    return year_min, year_max
+
+
+def load_panel(year_min=None, year_max=None, exclude_financial=True,
+               exclude_newly_listed=False, winsorize_pct=0.0, variables=None):
+    """加载 DWS 面板并统一执行样本筛选（可选缩尾），返回 DataFrame。
+
+    样本筛选条件（年份窗口 / 剔除金融业 / 剔除上市不足一年的新股）全部下推到
+    SQL WHERE 子句执行，避免全表读入内存后再用 pandas 过滤。
+    年份窗口缺省时取库内实际全部年份。
+    """
+    year_min, year_max = resolve_year_window(year_min, year_max)
+    conditions = ["year BETWEEN ? AND ?"]
+    params = [year_min, year_max]
+    if exclude_financial:
+        conditions.append("industry_category != ?")
+        params.append("金融业")
+    if exclude_newly_listed:
+        conditions.append("year > list_year")
+
+    sql = f"SELECT * FROM dws.firm_year_panel WHERE {' AND '.join(conditions)}"
+    conn = get_conn()
+    try:
+        df = conn.execute(sql, params).fetchdf()
+    finally:
+        conn.close()
     if variables:
         sel = [v for v in variables if v in df.columns]
         df = df[sel]
@@ -144,6 +176,19 @@ def load_panel(year_min=2018, year_max=2022, exclude_financial=True,
             if v in NUMERIC_VARS:
                 df[v] = winsorize(df[v], winsorize_pct)
     return df
+
+
+def _friendly_db_error(e: Exception, action: str) -> HTTPException:
+    """把 DuckDB 锁冲突等可预期异常映射为中文友好提示"""
+    msg = str(e)
+    if "Conflicting lock" in msg or "Could not set lock" in msg:
+        return HTTPException(
+            status_code=409,
+            detail=f"数据库正被其他任务占用（可能正在更新数据或运行 Pipeline），请稍后重试。原始信息: {msg}"
+        )
+    if "No such file" in msg or "不存在" in msg:
+        return HTTPException(status_code=500, detail=f"所需文件缺失，{action}失败: {msg}")
+    return HTTPException(status_code=500, detail=f"{action}失败: {msg}（详情可查看 logs/efdw.log）")
 
 
 # ─────────────────────────────────────────────
@@ -169,6 +214,8 @@ def get_stats():
             "year_max": row[2],
             "n_obs": row[3],
             "n_industries": row[4],
+            # 数据库文件最后修改时间（前端页头展示"库更新时间"）
+            "db_updated_at": datetime.fromtimestamp(DB_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
         }
     finally:
         conn.close()
@@ -179,8 +226,8 @@ def get_stats():
 # ─────────────────────────────────────────────
 @app.get("/api/descriptive")
 def get_descriptive(
-    year_min: int = Query(default=2018),
-    year_max: int = Query(default=2022),
+    year_min: int | None = Query(default=None),
+    year_max: int | None = Query(default=None),
     exclude_financial: bool = Query(default=True),
     exclude_newly_listed: bool = Query(default=False),
     winsorize_pct: float = Query(default=0.01),
@@ -229,8 +276,8 @@ def get_variable_dict():
 # ─────────────────────────────────────────────
 @app.get("/api/correlation")
 def get_correlation(
-    year_min: int = Query(default=2018),
-    year_max: int = Query(default=2022),
+    year_min: int | None = Query(default=None),
+    year_max: int | None = Query(default=None),
     exclude_financial: bool = Query(default=True),
     exclude_newly_listed: bool = Query(default=False),
     winsorize_pct: float = Query(default=0.01),
@@ -316,10 +363,11 @@ def get_benchmark(stkcd: str):
 # ─────────────────────────────────────────────
 @app.get("/api/industry")
 def get_industry_distribution(
-    year_min: int = Query(default=2018),
-    year_max: int = Query(default=2022),
+    year_min: int | None = Query(default=None),
+    year_max: int | None = Query(default=None),
 ):
     """行业样本分布（公司个数）"""
+    year_min, year_max = resolve_year_window(year_min, year_max)
     conn = get_conn()
     try:
         rows = conn.execute("""
@@ -335,7 +383,7 @@ def get_industry_distribution(
 
 
 # ─────────────────────────────────────────────
-# API: 6. Year-wise Observation Count
+# API: 7. Year-wise Observation Count
 # ─────────────────────────────────────────────
 @app.get("/api/yearly")
 def get_yearly_obs():
@@ -353,13 +401,13 @@ def get_yearly_obs():
 
 
 # ─────────────────────────────────────────────
-# API: 7. Variable Distribution (Histogram bins)
+# API: 8. Variable Distribution (Histogram bins)
 # ─────────────────────────────────────────────
 @app.get("/api/distribution")
 def get_distribution(
     variable: str = Query(default="roa"),
-    year_min: int = Query(default=2018),
-    year_max: int = Query(default=2022),
+    year_min: int | None = Query(default=None),
+    year_max: int | None = Query(default=None),
     exclude_financial: bool = Query(default=True),
     exclude_newly_listed: bool = Query(default=False),
     winsorize_pct: float = Query(default=0.01),
@@ -386,7 +434,7 @@ def get_distribution(
 
 
 # ─────────────────────────────────────────────
-# API: 8. Company List
+# API: 9. Company List
 # ─────────────────────────────────────────────
 @app.get("/api/companies")
 def get_companies():
@@ -404,7 +452,7 @@ def get_companies():
 
 
 # ─────────────────────────────────────────────
-# API: 9. Company Detail（含杜邦分解、五大能力指标与 Altman Z 预警）
+# API: 10. Company Detail（含杜邦分解、五大能力指标与 Altman Z 预警）
 # ─────────────────────────────────────────────
 @app.get("/api/company/{stkcd}")
 def get_company_detail(stkcd: str):
@@ -445,27 +493,35 @@ def get_company_detail(stkcd: str):
 
 
 # ─────────────────────────────────────────────
-# API: 10. Export Dataset
+# API: 11. Export Dataset
 # ─────────────────────────────────────────────
-@app.get("/api/export/csv")
-def export_csv(
-    year_min: int = Query(default=2018),
-    year_max: int = Query(default=2022),
-    exclude_financial: bool = Query(default=True),
-    exclude_newly_listed: bool = Query(default=False),
-    winsorize_pct: float = Query(default=0.01),
-    variables: str = Query(default=DEFAULT_EXPORT_VARS),
-):
-    """一键导出过滤后的 CSV 格式回归数据集"""
+def _build_export_df(year_min, year_max, exclude_financial, exclude_newly_listed,
+                     winsorize_pct, variables):
+    """导出数据集的统一构建逻辑（CSV / Stata / 配方文件共用，保证口径一致）"""
+    year_min, year_max = resolve_year_window(year_min, year_max)
     df = load_panel(year_min, year_max, exclude_financial, exclude_newly_listed, winsorize_pct=0.0)
     sel_vars = [v.strip() for v in variables.split(",") if v.strip() in NUMERIC_VARS]
     if winsorize_pct > 0:
         for v in sel_vars:
             if v in df.columns:
                 df[v] = winsorize(df[v], winsorize_pct)
-
     base_cols = ["stkcd", "company_name", "year", "industry_category"]
-    export_df = df[base_cols + sel_vars]
+    return df[base_cols + sel_vars], sel_vars, year_min, year_max
+
+
+@app.get("/api/export/csv")
+def export_csv(
+    year_min: int | None = Query(default=None),
+    year_max: int | None = Query(default=None),
+    exclude_financial: bool = Query(default=True),
+    exclude_newly_listed: bool = Query(default=False),
+    winsorize_pct: float = Query(default=0.01),
+    variables: str = Query(default=DEFAULT_EXPORT_VARS),
+):
+    """一键导出过滤后的 CSV 格式回归数据集"""
+    export_df, _, _, _ = _build_export_df(
+        year_min, year_max, exclude_financial, exclude_newly_listed, winsorize_pct, variables
+    )
 
     buf = io.StringIO()
     export_df.to_csv(buf, index=False, encoding="utf-8-sig")
@@ -480,23 +536,18 @@ def export_csv(
 
 @app.get("/api/export/stata")
 def export_stata(
-    year_min: int = Query(default=2018),
-    year_max: int = Query(default=2022),
+    year_min: int | None = Query(default=None),
+    year_max: int | None = Query(default=None),
     exclude_financial: bool = Query(default=True),
     exclude_newly_listed: bool = Query(default=False),
     winsorize_pct: float = Query(default=0.01),
     variables: str = Query(default=DEFAULT_EXPORT_VARS),
 ):
     """一键导出过滤后的 Stata .dta 格式回归数据集（Stata 14+ 支持中文）"""
-    df = load_panel(year_min, year_max, exclude_financial, exclude_newly_listed, winsorize_pct=0.0)
-    sel_vars = [v.strip() for v in variables.split(",") if v.strip() in NUMERIC_VARS]
-    if winsorize_pct > 0:
-        for v in sel_vars:
-            if v in df.columns:
-                df[v] = winsorize(df[v], winsorize_pct)
-
-    base_cols = ["stkcd", "company_name", "year", "industry_category"]
-    export_df = df[base_cols + sel_vars].copy()
+    export_df, _, _, _ = _build_export_df(
+        year_min, year_max, exclude_financial, exclude_newly_listed, winsorize_pct, variables
+    )
+    export_df = export_df.copy()
     export_df.columns = [c.lower() for c in export_df.columns]
 
     buf = io.BytesIO()
@@ -510,8 +561,56 @@ def export_stata(
     )
 
 
+@app.get("/api/export/meta")
+def export_meta(
+    year_min: int | None = Query(default=None),
+    year_max: int | None = Query(default=None),
+    exclude_financial: bool = Query(default=True),
+    exclude_newly_listed: bool = Query(default=False),
+    winsorize_pct: float = Query(default=0.01),
+    variables: str = Query(default=DEFAULT_EXPORT_VARS),
+):
+    """导出样本配方说明（_meta.txt）：与导出接口同参数，行数/窗口以后端真实执行结果为准"""
+    export_df, sel_vars, year_min, year_max = _build_export_df(
+        year_min, year_max, exclude_financial, exclude_newly_listed, winsorize_pct, variables
+    )
+    db_updated_at = datetime.fromtimestamp(DB_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    var_lines = "\n".join(f"  - {v}: {NUMERIC_VARS[v]}" for v in sel_vars)
+
+    meta_text = f"""EFDW 回归数据集 — 样本配方说明（_meta.txt）
+================================================
+导出时间:        {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+数据库更新时间:  {db_updated_at}
+
+样本筛选口径
+------------------------------------------------
+年份窗口:        {year_min} - {year_max}（后端实际执行窗口）
+剔除金融业:      {"是" if exclude_financial else "否"}
+剔除上市不足一年新股: {"是" if exclude_newly_listed else "否"}
+缩尾比例:        {winsorize_pct:.2%}（双侧）{"" if winsorize_pct > 0 else "（未缩尾）"}
+
+导出变量（{len(sel_vars)} 个）
+------------------------------------------------
+{var_lines}
+
+导出规模
+------------------------------------------------
+实际导出行数:    {len(export_df):,}
+基础列:          stkcd, company_name, year, industry_category
+
+复现提示: 在 EFDW 看板「数据导出」页按以上口径配置并重新导出，
+或调用 GET /api/export/csv 与 GET /api/export/stata 并携带相同参数。
+"""
+
+    return StreamingResponse(
+        iter([meta_text.encode("utf-8-sig")]),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=financial_regression_panel_meta.txt"}
+    )
+
+
 # ─────────────────────────────────────────────
-# API: 11. Get Database Tables
+# API: 12. Get Database Tables
 # ─────────────────────────────────────────────
 @app.get("/api/tables")
 def get_tables():
@@ -544,7 +643,7 @@ def get_tables():
 
 
 # ─────────────────────────────────────────────
-# API: 12. Financial Data Quality（财务勾稽关系校验报告）
+# API: 13. Financial Data Quality（财务勾稽关系校验报告）
 # ─────────────────────────────────────────────
 QUALITY_CHECK_COUNT = 10  # 与 ads_quality.sql 中的检查项数量保持一致
 
@@ -587,7 +686,7 @@ def run_quality_check():
     try:
         conn = duckdb.connect(str(DB_PATH))
         try:
-            with open("src/sql/ads_quality.sql", "r", encoding="utf-8") as f:
+            with open(SQL_DIR / "ads_quality.sql", "r", encoding="utf-8") as f:
                 conn.execute(f.read())
         finally:
             conn.close()
@@ -599,11 +698,11 @@ def run_quality_check():
             "summary": {k: report[k] for k in ("total_checks", "passed", "warned", "failed", "pass_rate")},
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"勾稽校验运行失败: {str(e)}")
+        raise _friendly_db_error(e, "勾稽校验运行")
 
 
 # ─────────────────────────────────────────────
-# API: 13. File Upload and Data Import
+# API: 14. File Upload and Data Import
 # ─────────────────────────────────────────────
 @app.post("/api/import")
 def import_file_api(
@@ -612,21 +711,30 @@ def import_file_api(
     varchar_columns: str = Form(default=""),
 ):
     """从前端上传文件并导入 DuckDB 贴源层"""
-    temp_dir = Path("data/tmp")
+    temp_dir = TMP_DIR
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     file_ext = Path(file.filename).suffix.lower()
-    temp_file_name = f"upload_{tempfile.mktemp(dir='')}{file_ext}"
-    temp_file_path = temp_dir / temp_file_name
+
+    # 安全的临时文件命名（避免 tempfile.mktemp 的竞态风险），用后务必清理
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext, dir=temp_dir, prefix="upload_") as tmp:
+        temp_file_path = Path(tmp.name)
+
+    importer = DataImporter(str(DB_PATH))
+
+    # 表名白名单校验（可带一层 schema 前缀），防止 SQL 注入
+    if not table_name:
+        table_name = importer._path_to_table_name(Path(file.filename), "ods")
+    if not is_valid_table_name(table_name):
+        temp_file_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=400,
+            detail=f"非法表名: {table_name}（仅允许字母/数字/下划线，且须以字母或下划线开头，可带一层 schema 前缀）"
+        )
 
     try:
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-
-        importer = DataImporter(str(DB_PATH))
-
-        if not table_name:
-            table_name = importer._path_to_table_name(Path(file.filename), "ods")
 
         extra_varchar = [v.strip() for v in varchar_columns.split(",")] if varchar_columns else None
 
@@ -646,6 +754,7 @@ def import_file_api(
         finally:
             conn.close()
 
+        logger.info("文件导入成功: %s -> %s", file.filename, table_name)
         return {
             "success": True,
             "message": f"成功将 {file.filename} 导入至 {table_name}",
@@ -669,19 +778,18 @@ def import_file_api(
             }
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
+        logger.exception("文件导入失败: %s -> %s", file.filename, table_name)
+        raise _friendly_db_error(e, "导入")
 
     finally:
-        if temp_file_path.exists():
-            try:
-                temp_file_path.unlink()
-            except Exception:
-                pass
+        temp_file_path.unlink(missing_ok=True)
 
 
 # ─────────────────────────────────────────────
-# API: 13. Run Data Cleaning & Panel Pipeline
+# API: 15. Run Data Cleaning & Panel Pipeline
 # ─────────────────────────────────────────────
 @app.post("/api/run-pipeline")
 def run_pipeline_api():
@@ -694,14 +802,93 @@ def run_pipeline_api():
             "message": "数仓清洗与财务指标计算 Pipeline 运行成功！"
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Pipeline 运行失败: {str(e)}"
-        )
+        raise _friendly_db_error(e, "Pipeline 运行")
 
 
 # ─────────────────────────────────────────────
-# API: 14. 4 级企业名称智能消歧
+# API: 16. 一键更新数据（抓取 → 导入 → 清洗，后台线程执行）
+# ─────────────────────────────────────────────
+REFRESH_STEPS = [
+    ("fetch_real_data", "抓取 akshare 全市场真实数据（增量复用磁盘缓存）", ["src/etl/fetch_real_data.py"]),
+    ("import_raw", "导入 ODS 贴源层", ["src/etl/import_raw.py"]),
+    ("run_pipeline", "运行 DWD -> DWS -> ADS 清洗管线", ["src/run_pipeline.py"]),
+]
+
+# 数据刷新任务状态（单任务互斥，内存态）
+_refresh_lock = threading.Lock()
+_refresh_state = {
+    "running": False,
+    "step": None,          # 当前执行步骤名
+    "started_at": None,
+    "finished_at": None,
+    "success": None,       # None=未运行过/运行中, True/False=最近一次结果
+    "message": None,
+}
+
+
+def _refresh_worker():
+    """后台线程：依次以子进程执行 抓取 -> 导入 -> 清洗，避免阻塞 API 主线程"""
+    try:
+        for step_name, step_desc, script in REFRESH_STEPS:
+            _refresh_state["step"] = step_name
+            logger.info("[数据更新] 开始步骤 %s: %s", step_name, step_desc)
+            proc = subprocess.run(
+                [sys.executable, *script],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode != 0:
+                tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+                raise RuntimeError(f"步骤 {step_name} 失败（退出码 {proc.returncode}）: {' | '.join(tail)}")
+            logger.info("[数据更新] 步骤 %s 完成", step_name)
+
+        _refresh_state["success"] = True
+        _refresh_state["message"] = "数据更新完成：抓取、导入与清洗管线全部成功。"
+        logger.info("[数据更新] 全部步骤完成")
+    except Exception as e:
+        _refresh_state["success"] = False
+        _refresh_state["message"] = str(e)
+        logger.error("[数据更新] 失败: %s", e)
+    finally:
+        _refresh_state["running"] = False
+        _refresh_state["step"] = None
+        _refresh_state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+@app.post("/api/refresh-data")
+def refresh_data():
+    """一键更新数据：后台线程依次执行 fetch_real_data -> import_raw -> run_pipeline"""
+    with _refresh_lock:
+        if _refresh_state["running"]:
+            raise HTTPException(status_code=409, detail="数据更新任务正在运行中，请稍候。")
+        _refresh_state.update({
+            "running": True,
+            "step": None,
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": None,
+            "success": None,
+            "message": None,
+        })
+        threading.Thread(target=_refresh_worker, daemon=True).start()
+    logger.info("[数据更新] 任务已启动")
+    return {"success": True, "message": "数据更新任务已在后台启动，可通过 /api/refresh-data/status 查询进度。"}
+
+
+@app.get("/api/refresh-data/status")
+def refresh_data_status():
+    """查询数据更新任务的运行状态与最近一次结果"""
+    step_labels = {name: desc for name, desc, _ in REFRESH_STEPS}
+    return {
+        **_refresh_state,
+        "step_label": step_labels.get(_refresh_state["step"]),
+    }
+
+
+# ─────────────────────────────────────────────
+# API: 17. 4 级企业名称智能消歧
 # ─────────────────────────────────────────────
 class ResolveRequest(BaseModel):
     names: list[str]
@@ -820,6 +1007,5 @@ def resolve_company_names(request: ResolveRequest):
 # ─────────────────────────────────────────────
 from fastapi.staticfiles import StaticFiles
 
-_FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
-if _FRONTEND_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIR), html=True), name="frontend")
+if FRONTEND_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

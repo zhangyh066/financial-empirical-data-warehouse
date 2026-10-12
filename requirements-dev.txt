@@ -1,0 +1,4 @@
+# EFDW 开发/测试依赖（在 requirements.txt 之外额外安装）
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27

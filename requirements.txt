@@ -1,0 +1,10 @@
+# EFDW 企业财务实证数据仓库 — 运行依赖（Python 3.10+）
+pandas>=2.0
+polars>=0.20
+duckdb>=0.10
+pyarrow>=14.0
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
+akshare>=1.14
+openpyxl>=3.1

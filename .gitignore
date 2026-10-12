@@ -58,9 +58,12 @@ venv.bak/
 # Project Specific - Enterprise Financial Data Warehouse
 data/raw/*
 !data/raw/.gitkeep
+!data/raw/pending/
+!data/raw/pending/.gitkeep
 data/warehouse/*
 !data/warehouse/.gitkeep
 data/tmp/
+logs/
 *.db
 *.db.wal
 *.db.tmp

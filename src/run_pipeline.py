@@ -1,31 +1,70 @@
-import os
+"""
+EFDW 数仓清洗与分析 Pipeline (DWD -> DWS -> ADS)
+=================================================
+全量重建前自动备份现有数据库到 data/warehouse/backups/（仅保留最近 5 份）。
+"""
+
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+
 import duckdb
 import pandas as pd
 
-DB_PATH = "data/warehouse/financial_warehouse.db"
+# 兼容 `python src/run_pipeline.py` 直接运行：把项目根目录加入模块搜索路径
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.config import BACKUP_DIR, BACKUP_KEEP, DB_PATH, SQL_DIR, get_logger
+
+logger = get_logger("efdw.pipeline")
+
+
+def backup_database(max_backups: int = BACKUP_KEEP) -> Path | None:
+    """全量重建前备份现有数据库文件，仅保留最近 max_backups 份"""
+    if not DB_PATH.exists():
+        return None
+
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = BACKUP_DIR / f"financial_warehouse_{timestamp}.db"
+    shutil.copy2(DB_PATH, backup_path)
+    logger.info("数据库已备份至: %s", backup_path)
+
+    # 清理过期备份，仅保留最近 max_backups 份
+    backups = sorted(BACKUP_DIR.glob("financial_warehouse_*.db"))
+    for old in backups[:-max_backups]:
+        old.unlink()
+        logger.info("已清理过期备份: %s", old.name)
+
+    return backup_path
 
 
 def run_pipeline():
-    print("=== 开始运行数仓清洗与分析 Pipeline (DWD -> DWS -> ADS) ===")
+    logger.info("=== 开始运行数仓清洗与分析 Pipeline (DWD -> DWS -> ADS) ===")
 
-    if not os.path.exists(DB_PATH):
-        print(f"[错误] 数据库 {DB_PATH} 不存在，请先运行初始化和导入脚本。")
+    if not DB_PATH.exists():
+        logger.error("数据库 %s 不存在，请先运行初始化和导入脚本。", DB_PATH)
         return
 
-    conn = duckdb.connect(DB_PATH)
+    # 全量重建前自动备份现有数据库
+    backup_database()
+
+    conn = duckdb.connect(str(DB_PATH))
 
     sql_steps = [
-        ("DWD", "src/sql/dwd_cleaning.sql", "DWD 维度表与明细事实表"),
-        ("DWS", "src/sql/dws_panel.sql", "DWS 企业-年度财务面板宽表"),
-        ("ADS", "src/sql/ads_marts.sql", "ADS 行业聚合应用数据集市"),
-        ("ADS", "src/sql/ads_quality.sql", "ADS 财务勾稽关系校验报告"),
+        ("DWD", "dwd_cleaning.sql", "DWD 维度表与明细事实表"),
+        ("DWS", "dws_panel.sql", "DWS 企业-年度财务面板宽表"),
+        ("ADS", "ads_marts.sql", "ADS 行业聚合应用数据集市"),
+        ("ADS", "ads_quality.sql", "ADS 财务勾稽关系校验报告"),
     ]
 
-    for layer, sql_path, desc in sql_steps:
-        print(f"[{layer}] 正在执行: {sql_path} ...")
+    for layer, sql_file, desc in sql_steps:
+        sql_path = SQL_DIR / sql_file
+        logger.info("[%s] 正在执行: %s ...", layer, sql_path)
         with open(sql_path, "r", encoding="utf-8") as f:
             conn.execute(f.read())
-        print(f"[成功] {desc}构建成功！")
+        logger.info("[成功] %s构建成功！", desc)
 
     # 展示生成的面板数据样例
     print("\n=== [验证] DWS 层企业-年度财务面板样例 (dws.firm_year_panel) ===")
@@ -58,7 +97,7 @@ def run_pipeline():
     print(ads_df.to_string(index=False))
 
     conn.close()
-    print("\n=== Pipeline 全部运行成功！ ===")
+    logger.info("=== Pipeline 全部运行成功！ ===")
 
 
 if __name__ == "__main__":

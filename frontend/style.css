@@ -98,6 +98,13 @@ body {
     font-size: 0.75rem;
     color: var(--text-muted);
 }
+.header-data-info {
+    margin-left: var(--sp-3);
+    padding-left: var(--sp-3);
+    border-left: 1px solid var(--border-dark);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
 .status-dot {
     width: 7px; height: 7px;
     border-radius: 50%;
@@ -325,6 +332,33 @@ tbody tr:hover { background: var(--bg-hover); }
 }
 .btn-primary:hover {
     background: var(--accent-light);
+}
+/* 企业检索：空状态 / 加载态提示 */
+.company-empty-state {
+    margin-top: var(--sp-3);
+    padding: var(--sp-4);
+    border: 1px dashed var(--border-dark);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-align: center;
+}
+/* 低存在感次要按钮（用于"更新数据"等高风险操作，防误触） */
+.btn-subtle {
+    background: var(--bg-card);
+    color: var(--text-muted);
+    border-color: var(--border-dark);
+    font-size: 0.75rem;
+    padding: var(--sp-1) var(--sp-3);
+}
+.btn-subtle:hover {
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+}
+.btn-subtle:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 .btn-download {
     background: var(--text-primary);
@@ -570,6 +604,59 @@ tbody tr:hover { background: var(--bg-hover); }
     background: linear-gradient(90deg, var(--accent-bg) 0%, var(--bg-card) 100%);
     margin-bottom: var(--sp-6);
 }
+/* 空库 / 服务未就绪 新手引导卡片 */
+.onboarding-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-dark);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius);
+    padding: var(--sp-6);
+    margin-bottom: var(--sp-6);
+}
+.onboarding-card h2 {
+    font-size: 1.05rem;
+    margin: 0 0 var(--sp-2);
+}
+.onboarding-lead {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin: 0 0 var(--sp-4);
+}
+.onboarding-steps {
+    margin: 0 0 var(--sp-4);
+    padding-left: var(--sp-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+}
+.onboarding-steps li p {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin: var(--sp-1) 0 0;
+}
+.onboarding-steps code,
+.onboarding-cmd code {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    background: var(--bg-hover);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+}
+.onboarding-cmd pre {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-dark);
+    border-radius: var(--radius);
+    padding: var(--sp-3) var(--sp-4);
+    overflow-x: auto;
+    margin: var(--sp-2) 0 0;
+}
+.onboarding-cmd p {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin: 0;
+}
 .pipeline-header-wrap {
     display: flex;
     justify-content: space-between;
@@ -578,6 +665,39 @@ tbody tr:hover { background: var(--bg-hover); }
 }
 .pipeline-title-group {
     flex: 1;
+}
+/* 高级操作折叠区：默认收起，降低误触概率 */
+.advanced-ops {
+    margin-top: var(--sp-4);
+    border-top: 1px dashed var(--border-dark);
+    padding-top: var(--sp-2);
+}
+.advanced-ops summary {
+    cursor: pointer;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    user-select: none;
+    list-style: none;
+}
+.advanced-ops summary::before {
+    content: '▸ ';
+}
+.advanced-ops[open] summary::before {
+    content: '▾ ';
+}
+.advanced-ops-body {
+    margin-top: var(--sp-2);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+}
+.advanced-ops-note {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    flex: 1;
+    min-width: 260px;
+    margin: 0;
 }
 .pipeline-tag {
     display: inline-block;

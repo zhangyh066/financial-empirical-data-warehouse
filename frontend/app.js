@@ -54,26 +54,92 @@ let chartIndustry = null;
 let chartDist = null;
 let chartCompanyTrend = null;
 
+// ─── 中文友好错误映射 ───
+// 把原始网络/HTTP 错误转换为中文提示 + 解决建议
+async function fetchJson(url, options) {
+    let res;
+    try {
+        res = await fetch(url, options);
+    } catch (_) {
+        throw new Error('看板服务未启动或已断线：请双击 启动看板.bat（或在项目根目录运行 uvicorn src.api:app --port 8000）后刷新页面。');
+    }
+    if (!res.ok) {
+        let detail = '';
+        try { detail = (await res.json()).detail || ''; } catch (_) {}
+        if (/lock|锁定|占用|重建/i.test(detail)) {
+            throw new Error('数据库正在重建中或被其他任务占用，请稍后重试。');
+        }
+        if (res.status === 404) throw new Error(detail || '请求的资源不存在（404），请检查输入是否正确。');
+        if (res.status === 503) throw new Error(detail || '数据库未初始化，请先按页面上方的新手引导完成数据装载。');
+        if (res.status === 500) {
+            throw new Error(detail ? `${detail}（可查看 logs/efdw.log 排查）` : '服务器内部错误（500），可查看 logs/efdw.log 排查。');
+        }
+        throw new Error(detail || `请求失败（HTTP ${res.status}）。`);
+    }
+    return res.json();
+}
+
 // ─── API Status Check ───
+// 返回 'ok'（数据就绪）/ 'offline'（服务未启动）/ 'missing'（库未初始化）/ 'empty'（库为空无样本）
 async function checkApi() {
     const dot  = $('#api-status .status-dot');
     const text = $('#api-status .status-text');
     try {
         const res = await fetch(`${API}/api/stats`);
         if (res.ok) {
+            const data = await res.json();
+            if (!data.n_firms || !data.n_obs) {
+                dot.classList.add('error');
+                dot.classList.remove('connected');
+                text.textContent = '数据库为空';
+                return 'empty';
+            }
             dot.classList.add('connected');
             dot.classList.remove('error');
             text.textContent = 'API Connected';
-            return true;
+            return 'ok';
+        }
+        if (res.status === 503) {
+            dot.classList.add('error');
+            dot.classList.remove('connected');
+            text.textContent = '数据库未初始化';
+            return 'missing';
         }
     } catch (_) {}
     dot.classList.add('error');
     dot.classList.remove('connected');
     text.textContent = 'API Offline';
-    return false;
+    return 'offline';
+}
+
+// ─── 空库 / 服务未就绪 新手引导 ───
+function showOnboarding(status) {
+    const card = $('#onboarding-card');
+    const lead = $('#onboarding-lead');
+    const steps = $('#onboarding-steps');
+    const cmd = $('#onboarding-cmd');
+    card.style.display = 'block';
+    if (status === 'offline') {
+        // 服务没起：与"库为空"区分提示
+        lead.textContent = '看板服务未启动或已断线：请双击项目根目录的 启动看板.bat（或在项目根目录运行 uvicorn src.api:app --port 8000），待服务启动后刷新本页面。';
+        steps.style.display = 'none';
+        cmd.style.display = 'none';
+    } else {
+        lead.textContent = status === 'empty'
+            ? '数据库已建立，但里面还没有任何样本数据。按下面三步完成首次数据装载，即可开始分析：'
+            : '数据库尚未初始化。按下面三步完成首次安装，即可开始分析：';
+        steps.style.display = '';
+        cmd.style.display = '';
+    }
+}
+
+function hideOnboarding() {
+    $('#onboarding-card').style.display = 'none';
 }
 
 // ─── 1. Load Overview Stats ───
+let exportYearsInited = false;  // 导出页年份默认值仅初始化一次，避免覆盖用户手改的值
+
 async function loadStats() {
     try {
         const data = await (await fetch(`${API}/api/stats`)).json();
@@ -81,6 +147,21 @@ async function loadStats() {
         $('#stat-years').textContent = `${data.year_min}–${data.year_max}`;
         $('#stat-obs').textContent = data.n_obs;
         $('#stat-industries').textContent = data.n_industries;
+        // 页头展示"数据更新至 YYYY 年 / 库更新时间"
+        const info = $('#header-data-info');
+        if (info && data.db_updated_at) {
+            info.textContent = `数据更新至 ${data.year_max} 年 · 库更新 ${data.db_updated_at}`;
+        }
+        // 数据导出页年份窗口默认值 = 库内实际年份范围（仅首次加载填充）
+        if (!exportYearsInited) {
+            const yMin = $('#exp-year-min');
+            const yMax = $('#exp-year-max');
+            if (yMin && yMax) {
+                yMin.value = data.year_min;
+                yMax.value = data.year_max;
+                exportYearsInited = true;
+            }
+        }
     } catch (_) {}
 }
 
@@ -206,21 +287,46 @@ async function loadCompanies() {
     } catch (_) {}
 }
 
-function renderCompanyList(filter = '') {
+function showCompanyEmpty(msg) {
+    const empty = $('#company-empty-state');
+    empty.innerHTML = msg;
+    empty.style.display = msg ? 'block' : 'none';
+}
+
+async function renderCompanyList(filter = '') {
     const wrap  = $('#company-list-wrap');
     const tbody = $('#company-list-tbody');
     const q = filter.trim().toLowerCase();
 
-    let results = allCompanies;
-    if (q) {
-        results = allCompanies.filter(c =>
-            c.stkcd.includes(q) || (c.company_name || '').toLowerCase().includes(q)
-        );
-    }
-    if (results.length === 0) {
+    // 每次发起新搜索，先隐藏上一个公司的详情面板，防止旧数据残留被误读
+    $('#company-detail').style.display = 'none';
+
+    // 空查询：收起结果区，不做全量罗列
+    if (!q) {
         wrap.style.display = 'none';
+        showCompanyEmpty('');
         return;
     }
+
+    // 企业清单尚未加载完成时给出简单加载态
+    if (allCompanies.length === 0) {
+        showCompanyEmpty('⏳ 企业清单加载中，请稍候…');
+        await loadCompanies();
+    }
+
+    const results = allCompanies.filter(c =>
+        c.stkcd.includes(q) || (c.company_name || '').toLowerCase().includes(q)
+    );
+
+    // 无匹配：显示明确的空状态提示，且不残留任何旧结果/旧详情
+    if (results.length === 0) {
+        wrap.style.display = 'none';
+        tbody.innerHTML = '';
+        showCompanyEmpty('🔍 未找到匹配的企业，请检查代码或名称是否正确');
+        return;
+    }
+
+    showCompanyEmpty('');
     wrap.style.display = 'block';
     tbody.innerHTML = '';
     results.forEach(c => {
@@ -244,6 +350,7 @@ $('#company-search-input').addEventListener('keydown', (e) => {
 $('#company-search-input').addEventListener('input', (e) => {
     if (e.target.value.trim() === '') {
         $('#company-list-wrap').style.display = 'none';
+        showCompanyEmpty('');
     }
 });
 
@@ -345,7 +452,11 @@ async function loadCompanyDetail(stkcd) {
 
         // 行业对标分析面板
         loadBenchmark(stkcd);
-    } catch (_) {}
+    } catch (_) {
+        // 详情加载失败：隐藏可能残留的旧面板并给出提示
+        $('#company-detail').style.display = 'none';
+        showCompanyEmpty('⚠️ 企业详情加载失败，请确认 API 正常运行后重试');
+    }
 }
 // Expose to inline onclick
 window.loadCompanyDetail = loadCompanyDetail;
@@ -408,6 +519,24 @@ function renderBenchmark(year) {
 $('#benchmark-year-select').addEventListener('change', (e) => renderBenchmark(Number(e.target.value)));
 
 // ─── 6. Export Preview & Download ───
+let lastExportQs = '';  // 最近一次预览使用的查询串（meta 配方文件跟随下载用）
+
+// 勾选"同时下载配方说明"时，数据文件下载后自动跟随下载 _meta.txt
+function maybeDownloadMeta() {
+    if (!lastExportQs || !$('#exp-include-meta').checked) return;
+    setTimeout(() => {
+        const a = document.createElement('a');
+        a.href = `${API}/api/export/meta?${lastExportQs}`;
+        a.download = 'financial_regression_panel_meta.txt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }, 400);
+}
+
+$('#btn-dl-stata').addEventListener('click', maybeDownloadMeta);
+$('#btn-dl-csv').addEventListener('click', maybeDownloadMeta);
+
 function getExportParams() {
     const yearMin = $('#exp-year-min').value;
     const yearMax = $('#exp-year-max').value;
@@ -431,6 +560,10 @@ $('#btn-preview').addEventListener('click', async () => {
     try {
         const qs = buildExportQuery(p);
         const csvRes = await fetch(`${API}/api/export/csv?${qs}`);
+        if (!csvRes.ok) {
+            // 复用统一的中文友好错误映射
+            await fetchJson(`${API}/api/export/csv?${qs}`);
+        }
         const csvText = await csvRes.text();
 
         const lines = csvText.trim().split('\n');
@@ -450,10 +583,11 @@ $('#btn-preview').addEventListener('click', async () => {
         $('#preview-table-wrap').style.display = 'block';
         $('#download-row').style.display = 'flex';
 
+        lastExportQs = qs;
         $('#btn-dl-stata').href = `${API}/api/export/stata?${qs}`;
         $('#btn-dl-csv').href = `${API}/api/export/csv?${qs}`;
-    } catch (_) {
-        $('#preview-info').textContent = '预览失败，请确认后端 API 正常运行';
+    } catch (err) {
+        $('#preview-info').textContent = '预览失败：' + err.message;
     }
 });
 
@@ -474,12 +608,7 @@ $('#btn-run-corr').addEventListener('click', async () => {
             winsorize_pct: $('#corr-winsorize').checked ? 0.01 : 0,
             variables: vars.join(','),
         });
-        const res = await fetch(`${API}/api/correlation?${qs}`);
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || '计算失败');
-        }
-        const data = await res.json();
+        const data = await fetchJson(`${API}/api/correlation?${qs}`);
 
         // Render heatmap table
         const table = $('#corr-table');
@@ -566,8 +695,13 @@ $('#dict-search-input').addEventListener('input', (e) => {
 
 // ─── Init ───
 (async function init() {
-    const ok = await checkApi();
-    if (!ok) return;
+    const status = await checkApi();
+    // 数据未就绪（服务离线 / 库未初始化 / 库为空）：显示新手引导，不加载分析数据
+    if (status !== 'ok') {
+        showOnboarding(status);
+        return;
+    }
+    hideOnboarding();
     loadStats();
     loadDescriptive();
     loadIndustryChart();
@@ -712,17 +846,10 @@ btnImport.addEventListener('click', async () => {
     formData.append('varchar_columns', varcharCols);
 
     try {
-        const res = await fetch(`${API}/api/import`, {
+        const data = await fetchJson(`${API}/api/import`, {
             method: 'POST',
             body: formData
         });
-
-        if (!res.ok) {
-            const errData = await res.json();
-            throw new Error(errData.detail || '导入失败，请检查文件格式。');
-        }
-
-        const data = await res.json();
 
         alertBox.className = 'alert-box success';
         alertBox.innerHTML = `<span>✅</span> <div><strong>导入成功！</strong> ${data.message}</div>`;
@@ -849,12 +976,7 @@ if (btnRunQuality) {
         btnRunQuality.setAttribute('disabled', 'true');
         btnRunQuality.textContent = '⏳ 校验中...';
         try {
-            const res = await fetch(`${API}/api/run-quality`, { method: 'POST' });
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.detail || '校验运行失败');
-            }
-            const data = await res.json();
+            const data = await fetchJson(`${API}/api/run-quality`, { method: 'POST' });
             renderQuality({
                 ...data.summary,
                 n_firm_years: Math.round(data.summary.total_checks / 10),
@@ -888,20 +1010,14 @@ btnRunPipeline.addEventListener('click', async () => {
     pipelineAlert.innerHTML = `<span>⚙️</span> <div>DuckDB 正在执行数据分层清洗、多源实体关联、财务指标聚合与多期滞后项计算，请耐心等候...</div>`;
 
     try {
-        const res = await fetch(`${API}/api/run-pipeline`, {
+        const data = await fetchJson(`${API}/api/run-pipeline`, {
             method: 'POST'
         });
-
-        if (!res.ok) {
-            const errData = await res.json();
-            throw new Error(errData.detail || '数仓 Pipeline 运行失败。');
-        }
-
-        const data = await res.json();
 
         pipelineAlert.className = 'alert-box success';
         pipelineAlert.innerHTML = `<span>✅</span> <div><strong>数仓清洗成功！</strong> DWD 维度表、DWS 财务指标面板与 ADS 行业聚合集市已重构！${data.message}</div>`;
 
+        hideOnboarding();
         await checkApi();
         await loadStats();
         await loadDescriptive();
@@ -918,6 +1034,97 @@ btnRunPipeline.addEventListener('click', async () => {
         btnRunPipeline.innerHTML = `⚙️ 运行清洗 Pipeline`;
     }
 });
+
+
+// ─────────────────────────────────────────────
+// 12b. Refresh Data Runner（一键更新数据：抓取 → 导入 → 清洗）
+// ─────────────────────────────────────────────
+const btnRefreshData = $('#btn-refresh-data');
+const refreshAlert = $('#refresh-status-alert');
+let refreshPollTimer = null;
+
+function renderRefreshStatus(st) {
+    refreshAlert.style.display = 'flex';
+    if (st.running) {
+        refreshAlert.className = 'alert-box loading';
+        const stepText = st.step_label ? `当前步骤：${st.step_label}` : '正在初始化任务...';
+        refreshAlert.innerHTML = `<span>⏳</span> <div><strong>数据更新进行中</strong>（${stepText}），全量抓取约需 10-60 分钟，请耐心等待，可随时离开本页面。</div>`;
+    } else if (st.success === true) {
+        refreshAlert.className = 'alert-box success';
+        refreshAlert.innerHTML = `<span>✅</span> <div><strong>数据更新成功！</strong>${st.message || ''}（完成于 ${st.finished_at || '—'}）</div>`;
+    } else if (st.success === false) {
+        refreshAlert.className = 'alert-box error';
+        refreshAlert.innerHTML = `<span>❌</span> <div><strong>数据更新失败！</strong>${st.message || ''}</div>`;
+    } else {
+        refreshAlert.style.display = 'none';
+    }
+}
+
+async function pollRefreshStatus() {
+    try {
+        const st = await (await fetch(`${API}/api/refresh-data/status`)).json();
+        renderRefreshStatus(st);
+        if (!st.running) {
+            clearInterval(refreshPollTimer);
+            refreshPollTimer = null;
+            btnRefreshData.removeAttribute('disabled');
+            btnRefreshData.innerHTML = `🔄 更新数据（全量重抓 + 重建）`;
+            if (st.success === true) {
+                // 数据已重建，刷新页面各面板
+                hideOnboarding();
+                await checkApi();
+                await loadStats();
+                await loadDescriptive();
+                await loadIndustryChart();
+                await loadDistChart('roa');
+                await loadCompanies();
+                await loadInventory();
+            }
+        }
+    } catch (_) {}
+}
+
+if (btnRefreshData) {
+    btnRefreshData.addEventListener('click', async () => {
+        // 防误触：该操作会全量重抓并重建数仓，必须先经用户确认
+        const confirmed = confirm(
+            '⚠️ 确认更新数据？\n\n' +
+            '此操作将重新抓取 akshare 全市场行情并重算全部数据，耗时约 10-60 分钟，' +
+            '期间数据库会被占用，看板查询可能变慢或暂时失败。\n\n' +
+            '确定要继续吗？'
+        );
+        if (!confirmed) return;
+
+        btnRefreshData.setAttribute('disabled', 'true');
+        btnRefreshData.innerHTML = `⏳ 正在启动数据更新...`;
+        try {
+            const data = await fetchJson(`${API}/api/refresh-data`, { method: 'POST' });
+            if (!refreshPollTimer) {
+                refreshPollTimer = setInterval(pollRefreshStatus, 3000);
+            }
+            await pollRefreshStatus();
+        } catch (err) {
+            refreshAlert.style.display = 'flex';
+            refreshAlert.className = 'alert-box error';
+            refreshAlert.innerHTML = `<span>❌</span> <div><strong>无法启动数据更新：</strong>${err.message}</div>`;
+            btnRefreshData.removeAttribute('disabled');
+            btnRefreshData.innerHTML = `🔄 更新数据（全量重抓 + 重建）`;
+        }
+    });
+
+    // 页面加载时若已有任务在后台运行，恢复轮询与禁用状态
+    (async () => {
+        try {
+            const st = await (await fetch(`${API}/api/refresh-data/status`)).json();
+            if (st.running) {
+                btnRefreshData.setAttribute('disabled', 'true');
+                btnRefreshData.innerHTML = `⏳ 数据更新中...`;
+                renderRefreshStatus(st);
+                refreshPollTimer = setInterval(pollRefreshStatus, 3000);
+            }
+        } catch (_) {}
+    })();
+}
 
 
 // ─────────────────────────────────────────────
@@ -955,15 +1162,12 @@ if (btnRunAlign) {
         const resultsBlock = $('#align-results-block');
 
         try {
-            const res = await fetch(`${API}/api/resolve`, {
+            const data = await fetchJson(`${API}/api/resolve`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ names, threshold })
             });
 
-            if (!res.ok) throw new Error('接口对齐失败，请检查后端 API');
-
-            const data = await res.json();
             alignedResultsCache = data;
 
             const total = data.length;

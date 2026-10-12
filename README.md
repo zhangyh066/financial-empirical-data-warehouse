@@ -58,12 +58,14 @@ enterprise-financial-data-warehouse/
 │   │   ├── pending/                #   待导入的文件放这里（推荐）
 │   │   └── imported/               #   已导入的文件自动归档到这里
 │   └── warehouse/                  # DuckDB 数据库文件 + 导出数据
+│       ├── backups/                #   数据库自动备份（全量重建前生成，保留最近 5 份）
 │       └── financial_warehouse.db  #   核心数据库（一个文件走天下）
 │
 ├── src/                            # 后端（Python + SQL）
 │   ├── api.py                      #   FastAPI 后端 API 服务
+│   ├── config.py                   #   全局配置中心（路径常量 / 日志 / 表名校验）
 │   ├── initialize_db.py            #   初始化数据库和四层 Schema
-│   ├── run_pipeline.py             #   一键运行 DWD → DWS → ADS 清洗管线
+│   ├── run_pipeline.py             #   一键运行 DWD → DWS → ADS 清洗管线（自动备份数据库）
 │   ├── export.py                   #   一键导出 Stata .dta / CSV
 │   ├── inspect_db.py               #   快速查看数据库内容
 │   ├── etl/
@@ -79,6 +81,12 @@ enterprise-financial-data-warehouse/
 │   ├── index.html                  #   数据看板入口页
 │   ├── style.css                   #   科研风样式
 │   └── app.js                      #   前端交互逻辑（调用后端 API）
+│
+├── tests/                          # pytest 测试（API 冒烟 + DWD/DWS 指标逻辑）
+│
+├── docs/                           # 文档与界面截图
+│
+├── logs/                           # 运行日志（自动创建，滚动保留）
 │
 └── workbench/                      # 交互分析
     └── analysis_workbench.ipynb    #   金融硕士论文实证分析工作台模板
@@ -154,13 +162,13 @@ ads_marts.sql  ──►  ADS (聚合集市) ───┘
 
 ### 1. 安装 Python 依赖
 
-确保你的电脑有 Python 3.8+，然后在终端运行：
+要求 **Python 3.10+**（代码使用了 `str | None` 等新式类型注解语法），然后在项目根目录运行：
 
 ```bash
-pip install pandas polars duckdb pyarrow fastapi uvicorn python-multipart
+pip install -r requirements.txt
 ```
 
-> 已安装的包会自动跳过，不必担心重复安装。
+> 已安装的包会自动跳过，不必担心重复安装。如需运行测试，再执行 `pip install -r requirements-dev.txt`。
 
 ### 2. 初始化数据库 & 拉取真实数据
 
@@ -190,7 +198,7 @@ python src/run_pipeline.py
 - 执行 `dwd_cleaning.sql`：翻译字段名、构建公司维度表、过滤年报
 - 执行 `dws_panel.sql`：拼表、计算五大能力 20+ 财务指标 + 杜邦分解 + 多期滞后项
 - 执行 `ads_marts.sql`：生成行业-年度聚合集市与全市场年度概览
-- 在终端打印 DWS / ADS 样例供核对
+- 全量重建前自动把数据库备份到 `data/warehouse/backups/`（保留最近 5 份），并在终端打印 DWS / ADS 样例供核对
 
 ### 4. 验证安装结果
 
@@ -204,7 +212,7 @@ python src/inspect_db.py
 
 ## 🖥️ 一键启动（推荐）
 
-**双击项目根目录下的 `启动看板.bat`**：自动启动后端服务并打开浏览器，访问 http://127.0.0.1:8000/ 即是数据看板（API 文档在 http://127.0.0.1:8000/docs）。关闭该窗口即停止服务。
+**双击项目根目录下的 `启动看板.bat`**：自动检查并安装缺失依赖（`pip install -r requirements.txt`），然后启动后端服务并打开浏览器，访问 http://127.0.0.1:8000/ 即是数据看板（API 文档在 http://127.0.0.1:8000/docs）。关闭该窗口即停止服务。
 
 也可以命令行手动启动：
 
@@ -221,11 +229,32 @@ INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 
 ---
 
+## 🔒 安全边界（重要）
+
+本工具是**仅限本机使用**的课程项目，不是生产级服务：
+
+- API 未做任何身份认证，且包含文件导入、Pipeline 重建等写操作接口；CORS 仅放行 `http://127.0.0.1:8000` 与 `http://localhost:8000`。
+- **请不要把 8000 端口暴露到局域网或公网**（不要用 `--host 0.0.0.0` 启动，也不要在路由器/防火墙上做端口映射），否则同网段任何人都能改写你的数据库。
+- 上传导入的表名会做白名单校验（仅字母/数字/下划线），但仍请只导入自己可信的数据文件。
+
+---
+
+## 🧪 运行测试
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/ -q
+```
+
+测试使用 FastAPI TestClient 与临时 DuckDB 库，不访问网络、不依赖已启动的 8000 端口服务。
+
+---
+
 ## 🌐 前端看板使用
 
 后端运行后，浏览器访问 **http://127.0.0.1:8000/**（前端由后端同源托管，无需单独打开 HTML 文件）。
 
-> 直接双击 `frontend/index.html` 用 `file://` 打开也可以，前端会自动回退连接 `http://127.0.0.1:8000`。
+> 说明：API 已收紧 CORS 策略（仅放行 `http://127.0.0.1:8000` 与 `http://localhost:8000`），直接双击 `frontend/index.html` 用 `file://` 打开将无法再跨域调用 API，请通过 `启动看板.bat` 同源访问。
 
 ### 前端功能一览
 
@@ -234,7 +263,7 @@ INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 | **样本概览** | 数仓整体指标、学术 Table 1 描述性统计（支持缩尾、去金融业）、行业分布、变量直方图 |
 | **企业检索** | 搜索公司，查看财务指标时序、Altman Z 风险分区、杜邦三因子分解、**行业对标分析（分位排名）**、ROA/ROE 趋势图 |
 | **数据导出** | 按财务能力分组勾选变量、样本清洗（去金融业/去新股）、缩尾，一键导出 CSV 或 Stata .dta |
-| **数据导入** | 上传新的 Excel/CSV 文件导入数仓，查看四层表清单与**财务勾稽质量校验台** |
+| **数据导入** | 上传新的 Excel/CSV 文件导入数仓，查看四层表清单与**财务勾稽质量校验台**；折叠的「高级操作」区内提供 🔄 更新数据（全量重抓 + 重建），点击后需二次确认，后台运行并实时显示进度 |
 | **智能对齐** | 批量粘贴凌乱企业名称，4 级匹配算法对齐到标准股票代码 |
 | **相关矩阵** | 勾选变量生成 Pearson 相关性热力矩阵（论文 Table 3 标配） |
 | **变量字典** | 全变量中文标签、财务能力分类与 SQL 计算公式速查 |
@@ -309,12 +338,15 @@ print(r.json())
 ### 命令行导出
 
 ```bash
-python src/export.py
+python src/export.py                         # 默认导出数据库中实际存在的全部年份
+python src/export.py --start 2019 --end 2022 # 也可用 --start/--end 指定研究窗口
 ```
 
-生成文件：
+导出时会打印实际使用的年份窗口。生成文件：
 - `data/warehouse/regression_panel_data.dta`（Stata 14+ 格式，含中文）
 - `data/warehouse/regression_panel_data.csv`（UTF-8 编码）
+
+> **样本配方说明（_meta.txt）**：通过看板「数据导出」页下载 CSV / Stata 时，默认会同时下载 `financial_regression_panel_meta.txt`（可在下载区取消勾选），内容包含导出时间、后端实际执行的年份窗口、剔金融业/剔新股开关、缩尾比例、勾选变量清单、实际导出行数与数据库更新时间，便于在论文附录中复现筛选口径。也可直接调用 `GET /api/export/meta`（与导出接口同参数）获取。
 
 ### 在 Stata 中使用
 
@@ -377,9 +409,12 @@ reg roa lag_roa lag2_roa firm_size leverage i.year, cluster(stkcd)
 | `POST` | `/api/run-quality` | 手动触发勾稽校验（导入新数据后免跑全量管线） |
 | `GET` | `/api/export/csv` | 导出过滤后的 CSV 回归数据集 |
 | `GET` | `/api/export/stata` | 导出过滤后的 Stata .dta 回归数据集 |
-| `POST` | `/api/import` | 上传文件导入数仓 |
+| `GET` | `/api/export/meta` | 导出样本配方说明 _meta.txt（口径/变量/行数，与导出同参数） |
+| `POST` | `/api/import` | 上传文件导入数仓（表名白名单校验） |
 | `POST` | `/api/resolve` | 公司名称智能消歧（4 级匹配） |
-| `POST` | `/api/run-pipeline` | 手动触发 DWD → DWS → ADS 清洗管线 |
+| `POST` | `/api/run-pipeline` | 手动触发 DWD → DWS → ADS 清洗管线（重建前自动备份数据库） |
+| `POST` | `/api/refresh-data` | 一键更新数据：后台依次执行 抓取 → 导入 → 清洗 |
+| `GET` | `/api/refresh-data/status` | 查询数据更新任务运行状态与最近结果 |
 
 ---
 
@@ -391,7 +426,7 @@ reg roa lag_roa lag2_roa firm_size leverage i.year, cluster(stkcd)
 - **数据来源**：沪深京交易所官网（公司清单/上市日期/行业）、东方财富数据中心（财务三表简表、年末总市值）、新浪财经（流动资产/流动负债/留存收益/利息费用明细）
 - **曾用名表**：当前以现名建档（akshare 无全市场批量曾用名接口），消歧演示可用 `mock_data.py` 的样例数据
 
-依赖安装：`pip install akshare`
+依赖安装：已包含在 `requirements.txt`（`akshare>=1.14`）。
 
 ### 数据口径说明
 
@@ -428,7 +463,7 @@ reg roa lag_roa lag2_roa firm_size leverage i.year, cluster(stkcd)
 ```bash
 # ── 第一次安装（真实数据）──
 cd enterprise-financial-data-warehouse
-pip install pandas polars duckdb pyarrow fastapi uvicorn python-multipart akshare
+pip install -r requirements.txt
 python src/initialize_db.py
 python src/etl/fetch_real_data.py   # 或 --skip-enrich 快速版；可随时重跑续抓
 python src/etl/import_raw.py
@@ -440,11 +475,15 @@ uvicorn src.api:app --port 8000
 # 浏览器访问 http://127.0.0.1:8000/
 
 # ── 刷新行情数据（如新年报发布后）──
+# 方式一：看板「数据导入」页展开底部「高级操作」，点击 🔄 更新数据
+#         （会弹确认框；将重抓行情并全量重建，耗时 10-60 分钟，期间数据库被占用）
+# 方式二：命令行手动执行
 rm -rf data/raw/akshare_cache       # 清缓存重抓（不清则增量续用缓存）
 python src/etl/fetch_real_data.py
 python src/etl/import_raw.py
-python src/run_pipeline.py
+python src/run_pipeline.py          # 重建前自动备份数据库到 data/warehouse/backups/（保留最近 5 份）
 
 # ── 导出回归数据 ──
-python src/export.py
+python src/export.py                         # 默认导出数据库全部年份
+python src/export.py --start 2019 --end 2022 # 或指定研究窗口
 ```
