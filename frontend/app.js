@@ -80,12 +80,15 @@ async function fetchJson(url, options) {
 }
 
 // ─── API Status Check ───
-// 返回 'ok'（数据就绪）/ 'offline'（服务未启动）/ 'missing'（库未初始化）/ 'empty'（库为空无样本）
+// 返回 'ok'（数据就绪）/ 'offline'（服务未启动或超时）/ 'missing'（库未初始化）/ 'empty'（库为空无样本）
+// fetch 带 5 秒超时：服务无响应时按 offline 处理，避免状态灯卡在 Connecting…
 async function checkApi() {
     const dot  = $('#api-status .status-dot');
     const text = $('#api-status .status-text');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     try {
-        const res = await fetch(`${API}/api/stats`);
+        const res = await fetch(`${API}/api/stats`, { signal: controller.signal });
         if (res.ok) {
             const data = await res.json();
             if (!data.n_firms || !data.n_obs) {
@@ -105,7 +108,11 @@ async function checkApi() {
             text.textContent = '数据库未初始化';
             return 'missing';
         }
-    } catch (_) {}
+    } catch (_) {
+        // 超时 abort 与网络错误统一落入 offline 分支
+    } finally {
+        clearTimeout(timeoutId);
+    }
     dot.classList.add('error');
     dot.classList.remove('connected');
     text.textContent = 'API Offline';
@@ -120,8 +127,8 @@ function showOnboarding(status) {
     const cmd = $('#onboarding-cmd');
     card.style.display = 'block';
     if (status === 'offline') {
-        // 服务没起：与"库为空"区分提示
-        lead.textContent = '看板服务未启动或已断线：请双击项目根目录的 启动看板.bat（或在项目根目录运行 uvicorn src.api:app --port 8000），待服务启动后刷新本页面。';
+        // 服务没起：与"库为空"区分提示（页面每 5 秒自动重试，服务就绪后自动恢复）
+        lead.textContent = '看板服务未启动或已断线：请双击项目根目录的 启动看板.bat（或在项目根目录运行 uvicorn src.api:app --port 8000）。页面会每 5 秒自动重试连接，服务就绪后自动加载，无需手动刷新。';
         steps.style.display = 'none';
         cmd.style.display = 'none';
     } else {
@@ -693,14 +700,22 @@ $('#dict-search-input').addEventListener('input', (e) => {
     renderDict(e.target.value);
 });
 
-// ─── Init ───
-(async function init() {
+// ─── Init（命名函数 + 自动重试）───
+// 服务后启动/启动慢时，每 5 秒重试一次，直到数据就绪后正常加载；ok 后不再重试
+let dashboardLoaded = false;
+
+async function initDashboard() {
+    if (dashboardLoaded) return;  // 避免重复触发数据加载
+
     const status = await checkApi();
-    // 数据未就绪（服务离线 / 库未初始化 / 库为空）：显示新手引导，不加载分析数据
     if (status !== 'ok') {
+        // 数据未就绪（服务离线 / 库未初始化 / 库为空）：显示新手引导并定时重试
         showOnboarding(status);
+        setTimeout(initDashboard, 5000);
         return;
     }
+
+    dashboardLoaded = true;
     hideOnboarding();
     loadStats();
     loadDescriptive();
@@ -708,7 +723,9 @@ $('#dict-search-input').addEventListener('input', (e) => {
     loadDistChart('roa');
     loadCompanies();
     loadInventory();
-})();
+}
+
+initDashboard();
 
 
 // ─────────────────────────────────────────────

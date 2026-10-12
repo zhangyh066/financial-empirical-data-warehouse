@@ -27,6 +27,6 @@ if not exist "data\warehouse\financial_warehouse.db" (
 )
 
 echo 正在启动服务，看板地址: http://127.0.0.1:8000/
-echo 浏览器将自动打开；关闭本窗口即停止服务。
-start "" cmd /c "timeout /t 4 /nobreak >nul & start http://127.0.0.1:8000/"
+echo 浏览器将在服务就绪后自动打开（每 2 秒检测一次，最长等待 120 秒）；关闭本窗口即停止服务。
+start "" powershell -WindowStyle Hidden -Command "$ok=$false; for($i=0; $i -lt 60; $i++){ try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/api/stats' -UseBasicParsing -TimeoutSec 5; if($r.StatusCode -eq 200){ $ok=$true; break } } catch {}; Start-Sleep -Seconds 2 }; if($ok){ Start-Process 'http://127.0.0.1:8000/' }"
 python -m uvicorn src.api:app --port 8000
