@@ -65,7 +65,8 @@ enterprise-financial-data-warehouse/
 │   ├── api.py                      #   FastAPI 后端 API 服务
 │   ├── config.py                   #   全局配置中心（路径常量 / 日志 / 表名校验）
 │   ├── initialize_db.py            #   初始化数据库和四层 Schema
-│   ├── run_pipeline.py             #   一键运行 DWD → DWS → ADS 清洗管线（自动备份数据库）
+│   ├── run_pipeline.py             #   一键运行 DWD → DWS → ADS 清洗管线（事务化重建 + 自动备份）
+│   ├── run_quality.py              #   单独执行财务勾稽校验（无需重跑全量 Pipeline）
 │   ├── export.py                   #   一键导出 Stata .dta / CSV
 │   ├── inspect_db.py               #   快速查看数据库内容
 │   ├── etl/

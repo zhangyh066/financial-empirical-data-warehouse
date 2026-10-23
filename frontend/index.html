@@ -475,6 +475,13 @@ python src/run_pipeline.py</pre>
                                     <input type="text" id="import-varchar-cols" class="input-text" style="max-width:100%;" placeholder="强制转为文本以防丢失前导零的列名(逗号分隔，如 stkcd, indcd)">
                                     <p class="field-note" style="font-size:0.72rem; color:var(--text-muted); margin-top:var(--sp-1);">默认已保护：stkcd, stockcode, creditcode, indcd, industry_code 等</p>
                                 </div>
+                                <div class="field-row" style="margin-top: var(--sp-3);">
+                                    <label style="font-size:0.8rem; font-weight:500; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="checkbox" id="import-overwrite" style="accent-color:var(--accent);">
+                                        覆盖已存在的同名表
+                                    </label>
+                                    <p class="field-note" style="font-size:0.72rem; color:var(--text-muted); margin-top:var(--sp-1);">目标表已存在时默认拒绝导入并提示；勾选后将先删除旧表再导入（不可恢复）</p>
+                                </div>
                             </fieldset>
                         </div>
 
@@ -597,7 +604,7 @@ python src/run_pipeline.py</pre>
                                         <th>Null Pct (缺失率)</th>
                                     </tr>
                                 </thead>
-                                <tbody id="quality-tbody"></tbody>
+                                <tbody id="import-quality-tbody"></tbody>
                             </table>
                         </div>
 

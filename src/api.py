@@ -645,7 +645,35 @@ def get_tables():
 # ─────────────────────────────────────────────
 # API: 13. Financial Data Quality（财务勾稽关系校验报告）
 # ─────────────────────────────────────────────
-QUALITY_CHECK_COUNT = 10  # 与 ads_quality.sql 中的检查项数量保持一致
+
+def _quality_check_count() -> int:
+    """从 ads_quality.sql 的 UNION ALL 分支数推导检查项数量，避免硬编码与 SQL 脱钩"""
+    try:
+        sql = (SQL_DIR / "ads_quality.sql").read_text(encoding="utf-8")
+        return sql.upper().count("UNION ALL") + 1
+    except Exception:
+        logger.warning("无法读取 ads_quality.sql 推导检查项数量，回退默认值 10", exc_info=True)
+        return 10
+
+
+QUALITY_CHECK_COUNT = _quality_check_count()
+
+
+def _run_script_sync(script: str, action: str) -> None:
+    """以子进程同步执行项目脚本（写入 DuckDB 的操作统一走独立进程，
+    避免与 API 进程内的只读连接发生 "same database file with a different
+    configuration" 冲突；失败时抛出带尾部错误信息的 RuntimeError）"""
+    proc = subprocess.run(
+        [sys.executable, script],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+        raise RuntimeError(f"{action}失败（退出码 {proc.returncode}）: {' | '.join(tail)}")
 
 
 @app.get("/api/quality")
@@ -684,12 +712,7 @@ def get_quality_report():
 def run_quality_check():
     """手动触发财务勾稽关系校验（导入新数据后无需重跑全量 Pipeline）"""
     try:
-        conn = duckdb.connect(str(DB_PATH))
-        try:
-            with open(SQL_DIR / "ads_quality.sql", "r", encoding="utf-8") as f:
-                conn.execute(f.read())
-        finally:
-            conn.close()
+        _run_script_sync("src/run_quality.py", "勾稽校验运行")
         report = get_quality_report()
         return {
             "success": True,
@@ -709,8 +732,9 @@ def import_file_api(
     file: UploadFile = File(...),
     table_name: str = Form(default=""),
     varchar_columns: str = Form(default=""),
+    overwrite: bool = Form(default=False),
 ):
-    """从前端上传文件并导入 DuckDB 贴源层"""
+    """从前端上传文件并导入 DuckDB 贴源层（默认拒绝覆盖已存在的表，需显式勾选 overwrite）"""
     temp_dir = TMP_DIR
     temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -733,6 +757,13 @@ def import_file_api(
         )
 
     try:
+        # 防误覆盖：目标表已存在且未显式要求覆盖时直接拒绝，避免静默 DROP 核心表
+        if not overwrite and importer.table_exists(table_name):
+            raise HTTPException(
+                status_code=409,
+                detail=f"目标表 {table_name} 已存在。如确要覆盖，请勾选「覆盖已存在的同名表」后重试（旧表数据将被删除，不可恢复）。"
+            )
+
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
@@ -741,7 +772,8 @@ def import_file_api(
         import_res = importer.import_file(
             str(temp_file_path),
             table_name,
-            varchar_columns=extra_varchar
+            varchar_columns=extra_varchar,
+            drop_if_exists=overwrite,
         )
 
         quality_res = importer.check_quality(table_name)
@@ -793,10 +825,9 @@ def import_file_api(
 # ─────────────────────────────────────────────
 @app.post("/api/run-pipeline")
 def run_pipeline_api():
-    """手动触发数仓 DWD -> DWS -> ADS 清洗与指标计算逻辑"""
+    """手动触发数仓 DWD -> DWS -> ADS 清洗与指标计算逻辑（子进程执行，失败自动回滚）"""
     try:
-        from src.run_pipeline import run_pipeline
-        run_pipeline()
+        _run_script_sync("src/run_pipeline.py", "Pipeline 运行")
         return {
             "success": True,
             "message": "数仓清洗与财务指标计算 Pipeline 运行成功！"

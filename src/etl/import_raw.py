@@ -87,11 +87,11 @@ class DataImporter:
             else:
                 schema, table = 'main', parts[0]
             
-            res = conn.execute(f"""
-                SELECT COUNT(*) 
-                FROM information_schema.tables 
-                WHERE table_schema = '{schema}' AND table_name = '{table}'
-            """).fetchone()[0]
+            res = conn.execute("""
+                SELECT COUNT(*)
+                FROM information_schema.tables
+                WHERE table_schema = ? AND table_name = ?
+            """, [schema, table]).fetchone()[0]
             return res > 0
         except Exception:
             return False
@@ -359,17 +359,17 @@ class DataImporter:
             conn.execute(f"DROP TABLE IF EXISTS {table_name};")
 
             if fmt == "csv":
-                # DuckDB 原生支持 glob CSV
+                # DuckDB 原生支持 glob CSV（路径走参数绑定）
                 types_clause = self._build_varchar_types(files[0], varchar_columns)
-                conn.execute(f"""
-                    CREATE TABLE {table_name} AS
-                    SELECT * FROM read_csv_auto('{pattern}'{types_clause});
-                """)
+                conn.execute(
+                    f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto(?{types_clause});",
+                    [pattern],
+                )
             elif fmt == "parquet":
-                conn.execute(f"""
-                    CREATE TABLE {table_name} AS
-                    SELECT * FROM read_parquet('{pattern}');
-                """)
+                conn.execute(
+                    f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet(?);",
+                    [pattern],
+                )
             else:
                 # 其他格式：逐文件导入后 UNION ALL
                 for i, f in enumerate(files):
@@ -496,22 +496,23 @@ class DataImporter:
 
     def _import_csv(self, conn, file_path, table_name, varchar_columns=None):
         types_clause = self._build_varchar_types(file_path, varchar_columns)
-        conn.execute(f"""
-            CREATE TABLE {table_name} AS
-            SELECT * FROM read_csv_auto('{file_path}'{types_clause});
-        """)
+        # 路径走参数绑定，路径中含单引号/反斜杠等字符时不会被拼进 SQL
+        conn.execute(
+            f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto(?{types_clause});",
+            [file_path],
+        )
 
     def _import_parquet(self, conn, file_path, table_name):
-        conn.execute(f"""
-            CREATE TABLE {table_name} AS
-            SELECT * FROM read_parquet('{file_path}');
-        """)
+        conn.execute(
+            f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet(?);",
+            [file_path],
+        )
 
     def _import_json(self, conn, file_path, table_name):
-        conn.execute(f"""
-            CREATE TABLE {table_name} AS
-            SELECT * FROM read_json_auto('{file_path}');
-        """)
+        conn.execute(
+            f"CREATE TABLE {table_name} AS SELECT * FROM read_json_auto(?);",
+            [file_path],
+        )
 
     def _import_excel(self, conn, file_path, table_name, sheet=None, varchar_columns=None):
         """通过 Pandas 中转导入 Excel"""
@@ -596,7 +597,8 @@ class DataImporter:
 
             forced = {h: "VARCHAR" for h in headers if h.lower().strip() in str_cols}
             if forced:
-                types_str = ", ".join(f"'{k}': '{v}'" for k, v in forced.items())
+                # 列名进入 SQL 字符串字面量，转义单引号防止表头注入/语法错误
+                types_str = ", ".join(f"'{k.replace(chr(39), chr(39) * 2)}': 'VARCHAR'" for k in forced)
                 return f", types={{{types_str}}}"
         except Exception:
             pass

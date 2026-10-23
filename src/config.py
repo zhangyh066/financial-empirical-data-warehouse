@@ -22,6 +22,7 @@ DB_PATH = PROJECT_ROOT / "data" / "warehouse" / "financial_warehouse.db"
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 PENDING_DIR = RAW_DIR / "pending"      # 待导入文件目录
 IMPORTED_DIR = RAW_DIR / "imported"    # 已导入归档目录
+AKSHARE_CACHE_DIR = RAW_DIR / "akshare_cache"  # akshare 抓取中间缓存（断点续传）
 WAREHOUSE_DIR = PROJECT_ROOT / "data" / "warehouse"
 BACKUP_DIR = WAREHOUSE_DIR / "backups"  # 数据库自动备份目录
 TMP_DIR = PROJECT_ROOT / "data" / "tmp"

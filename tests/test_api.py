@@ -141,6 +141,29 @@ def test_import_accepts_legal_table_name():
         conn.close()
 
 
+def test_import_rejects_existing_table_without_overwrite():
+    """防误覆盖：目标表已存在时默认 409，显式 overwrite 才允许覆盖（随后清理）"""
+    import duckdb
+    files = {"file": ("pytest_ow.csv", b"stkcd,value\n000001,1.5\n", "text/csv")}
+    data = {"table_name": "ods.pytest_overwrite_smoke"}
+
+    r1 = client.post("/api/import", files=files, data=data)
+    assert r1.status_code == 200, r1.text
+
+    r2 = client.post("/api/import", files=files, data=data)
+    assert r2.status_code == 409
+    assert "已存在" in r2.json()["detail"]
+
+    r3 = client.post("/api/import", files=files, data={**data, "overwrite": "true"})
+    assert r3.status_code == 200, r3.text
+
+    conn = duckdb.connect(str(DB_PATH))
+    try:
+        conn.execute("DROP TABLE IF EXISTS ods.pytest_overwrite_smoke")
+    finally:
+        conn.close()
+
+
 def test_cors_allows_localhost_origin():
     """CORS 收紧后：本机回环 Origin 放行"""
     r = client.get("/api/dict", headers={"Origin": "http://127.0.0.1:8000"})

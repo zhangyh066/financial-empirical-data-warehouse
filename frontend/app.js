@@ -861,6 +861,7 @@ btnImport.addEventListener('click', async () => {
     formData.append('file', selectedFile);
     formData.append('table_name', tableName);
     formData.append('varchar_columns', varcharCols);
+    formData.append('overwrite', $('#import-overwrite').checked);
 
     try {
         const data = await fetchJson(`${API}/api/import`, {
@@ -884,7 +885,7 @@ btnImport.addEventListener('click', async () => {
             dupEl.style.color = 'var(--green)';
         }
 
-        const qTbody = $('#quality-tbody');
+        const qTbody = $('#import-quality-tbody');
         qTbody.innerHTML = '';
         data.quality.columns.forEach(col => {
             const tr = document.createElement('tr');

@@ -40,12 +40,18 @@ import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import pandas as pd
 import requests
 
-CACHE_DIR = "data/raw/akshare_cache"
-RAW_DIR = "data/raw"
+# 兼容 `python src/etl/fetch_real_data.py` 直接运行：把项目根目录加入模块搜索路径
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+from src.config import AKSHARE_CACHE_DIR, RAW_DIR
+
+CACHE_DIR = str(AKSHARE_CACHE_DIR)
+RAW_DIR = str(RAW_DIR)
 
 FIN_COLS = [
     "Stkcd", "Accper",

@@ -42,11 +42,12 @@ ratios AS (
     SELECT
         *,
         -- ── 规模与市场 ──
-        LN(assets) AS firm_size,                                    -- 企业规模 Size
-        debt / assets AS leverage,                                  -- 资产负债率 Lev
-        (equity_mv + debt) / assets AS tobin_q,                     -- 托宾 Q
+        -- firm_size 对 assets ≤ 0 置 NULL（DuckDB 的 LN(0)/LN(负数) 会直接抛错，一行坏数据会中断整个重建）
+        CASE WHEN assets > 0 THEN LN(assets) END AS firm_size,     -- 企业规模 Size
+        debt / NULLIF(assets, 0) AS leverage,                      -- 资产负债率 Lev
+        (equity_mv + debt) / NULLIF(assets, 0) AS tobin_q,         -- 托宾 Q
         -- ── 盈利能力 ──
-        net_income / assets AS roa,                                 -- 总资产收益率 ROA
+        net_income / NULLIF(assets, 0) AS roa,                     -- 总资产收益率 ROA
         net_income / NULLIF(equity, 0) AS roe,                      -- 净资产收益率 ROE
         (revenue - operating_cost) / NULLIF(revenue, 0) AS gross_margin,   -- 销售毛利率
         net_income / NULLIF(revenue, 0) AS net_margin,              -- 销售净利率
