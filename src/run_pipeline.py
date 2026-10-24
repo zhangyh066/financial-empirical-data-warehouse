@@ -28,6 +28,41 @@ SQL_STEPS = [
     ("ADS", "ads_quality.sql", "ADS 财务勾稽关系校验报告"),
 ]
 
+# ODS 贴源层的最低字段要求：旧抓取数据缺列时自动补 NULL 列（DWD SQL 才能引用），
+# 下次「更新数据」重抓后自然填充真实值
+ODS_REQUIRED_COLUMNS = {
+    "ods.financial_raw": [
+        "F010101A", "F010201A", "F010301A", "F010401A",
+        "F010701A", "F010801A",
+        "F011001A", "F011101A", "F011201A", "F011301A", "F010901A",
+        "F020101A", "F020201A", "F020301A", "F020401A", "F020501A",
+        "F030101A",
+        "F040101A", "F040201A", "F040301A",
+        "F100101C",
+    ],
+}
+
+
+def _ensure_ods_columns(conn) -> None:
+    """为历史 ODS 表补齐缺失字段（补 NULL），保证 DWD SQL 向前兼容旧数据"""
+    for table, columns in ODS_REQUIRED_COLUMNS.items():
+        if not conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema || '.' || table_name = ?",
+            [table],
+        ).fetchone()[0]:
+            continue
+        existing = {
+            r[0] for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema || '.' || table_name = ?",
+                [table],
+            ).fetchall()
+        }
+        for col in columns:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} VARCHAR;")
+                logger.info("[迁移] %s 缺列 %s，已自动补 NULL 列（重抓数据后填充）", table, col)
+
 
 def backup_database(max_backups: int = BACKUP_KEEP) -> Path | None:
     """全量重建前备份现有数据库文件，仅保留最近 max_backups 份"""
@@ -53,6 +88,7 @@ def _rebuild_warehouse(conn) -> None:
     """在单事务内执行四层重建 SQL：失败自动回滚，旧表不会被半途 DROP 丢失"""
     conn.execute("BEGIN TRANSACTION")
     try:
+        _ensure_ods_columns(conn)
         for layer, sql_file, desc in SQL_STEPS:
             sql_path = SQL_DIR / sql_file
             logger.info("[%s] 正在执行: %s ...", layer, sql_path)

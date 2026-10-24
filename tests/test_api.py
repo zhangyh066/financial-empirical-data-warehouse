@@ -176,3 +176,75 @@ def test_cors_rejects_foreign_origin():
     r = client.get("/api/dict", headers={"Origin": "http://evil.example.com"})
     assert r.status_code == 200
     assert "access-control-allow-origin" not in r.headers
+
+
+# ─────────────────────────────────────────────
+# 财务分析深化功能：覆盖矩阵 / 市场概览 / 行业趋势 / 公司对比 / 体检报告
+# ─────────────────────────────────────────────
+
+def _first_company():
+    rows = client.get("/api/companies").json()
+    return rows[0]["stkcd"]
+
+
+def test_coverage_matrix():
+    """变量×年度覆盖矩阵：值域合法且包含核心变量"""
+    r = client.get("/api/coverage")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["years"]) > 0
+    cov_by_var = {v["variable"]: v for v in data["variables"]}
+    assert "roa" in cov_by_var
+    for year, pct in cov_by_var["roa"]["coverage"].items():
+        assert 0 <= pct <= 1
+
+
+def test_market_overview():
+    r = client.get("/api/market-overview")
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) > 0
+    assert {"year", "n_firms", "avg_roa", "avg_leverage"} <= set(rows[0].keys())
+
+
+def test_industry_trend():
+    r = client.get("/api/industry-trend", params={"metrics": "avg_roa,avg_leverage"})
+    assert r.status_code == 200
+    rows = r.json()
+    assert len(rows) > 0
+    assert {"industry", "year", "avg_roa", "avg_leverage"} <= set(rows[0].keys())
+    # 非法指标 → 400
+    r_bad = client.get("/api/industry-trend", params={"metrics": "evil_col"})
+    assert r_bad.status_code == 400
+
+
+def test_compare_companies():
+    stkcd = _first_company()
+    r = client.get("/api/compare", params={"stkcds": f"{stkcd}", "variable": "roa"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["variable"] == "roa"
+    assert len(data["series"]) == 1
+    assert len(data["series"][0]["points"]) > 0
+    # 非法变量 / 空列表 → 400
+    assert client.get("/api/compare", params={"stkcds": stkcd, "variable": "evil"}).status_code == 400
+    assert client.get("/api/compare", params={"stkcds": "", "variable": "roa"}).status_code == 400
+
+
+def test_health_report():
+    stkcd = _first_company()
+    r = client.get(f"/api/health/{stkcd}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["stkcd"] == stkcd
+    assert data["company_name"]
+    assert len(data["radar"]) == 5
+    for dim in data["radar"]:
+        assert dim["dimension"] and dim["variable"]
+        if dim["percentile"] is not None:
+            assert 0 <= dim["percentile"] <= 1
+    assert len(data["panel"]) > 0
+    assert isinstance(data["latest_year"], int)
+    assert data["n_industry_firms"] > 0
+    # 不存在的公司 → 404
+    assert client.get("/api/health/999999").status_code == 404

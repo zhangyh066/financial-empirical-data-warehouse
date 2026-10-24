@@ -31,8 +31,12 @@ WITH base_panel AS (
         f.operating_cost,
         f.operating_profit,
         f.interest_expense,
+        f.income_tax,
         f.net_income,
         f.ocf,
+        f.invest_cf,
+        f.finance_cf,
+        f.fixed_assets,
         f.equity_mv
     FROM dwd.fact_financial f
     LEFT JOIN dwd.dim_company c ON f.stkcd = c.stkcd
@@ -72,11 +76,40 @@ ratios AS (
         -- ── 现金流能力 ──
         ocf / NULLIF(assets, 0) AS ocf_to_assets,                   -- 经营现金流 / 总资产
         ocf / NULLIF(net_income, 0) AS ocf_to_net_income,           -- 盈余现金保障倍数
+        -- ── 盈利质量与应计（盈余管理研究核心变量） ──
+        (net_income - ocf) / NULLIF(assets, 0) AS accruals_to_assets, -- 总应计 TA / 总资产（NI − OCF 口径）
+        cash / NULLIF(assets, 0) AS cash_holdings,                    -- 现金持有比率
+        (ocf + invest_cf) / NULLIF(assets, 0) AS fcf_to_assets,       -- 简化自由现金流/总资产（OCF + 投资现金流净额）
+        -- ── 融资约束 ──
+        -- SA 指数（Hadlock & Pierce 2010）：-0.737·Size + 0.043·Size² − 0.040·Age，Size=ln(总资产/百万)，绝对值越大约束越强
+        year - list_year AS firm_age,
+        CASE WHEN assets > 0 THEN
+            -0.737 * LN(assets / 1000000.0) + 0.043 * LN(assets / 1000000.0) * LN(assets / 1000000.0)
+            - 0.040 * (year - list_year)
+        END AS sa_index,
+        -- ── 新兴市场版 Altman Z''（Altman 2005，非金融企业；账面权益替代市值权益） ──
+        -- Z'' = 6.56·WC/TA + 3.26·RE/TA + 6.72·EBIT/TA + 1.05·BVE/TL；<1.1 危险，1.1-2.6 灰色，>2.6 安全
+        CASE WHEN industry_category != '金融业'
+             THEN 6.56 * (current_assets - current_liabilities) / NULLIF(assets, 0)
+                + 3.26 * retained_earnings / NULLIF(assets, 0)
+                + 6.72 * (operating_profit + interest_expense) / NULLIF(assets, 0)
+                + 1.05 * equity / NULLIF(debt, 0)
+        END AS altman_z_em,
         -- ── 杜邦分解三因子：ROE = 净利率 × 总资产周转率 × 权益乘数 ──
         assets / NULLIF(equity, 0) AS equity_multiplier,            -- 权益乘数
         net_income / NULLIF(revenue, 0)
             * (revenue / NULLIF(assets, 0))
-            * (assets / NULLIF(equity, 0)) AS dupont_roe             -- 杜邦验证 ROE（应 ≈ roe）
+            * (assets / NULLIF(equity, 0)) AS dupont_roe,            -- 杜邦验证 ROE（应 ≈ roe）
+        -- ── 杜邦五因子（需要所得税费用字段；缺数时相关因子为 NULL） ──
+        -- ROE = 税负担 × 利息负担 × 经营利润率(EBIT) × 周转率 × 权益乘数
+        net_income / NULLIF(net_income + income_tax, 0) AS dp_tax_burden,                    -- NI/EBT
+        (net_income + income_tax) / NULLIF(operating_profit + interest_expense, 0) AS dp_interest_burden, -- EBT/EBIT
+        (operating_profit + interest_expense) / NULLIF(revenue, 0) AS dp_ebit_margin,        -- EBIT/营收
+        net_income / NULLIF(net_income + income_tax, 0)
+            * (net_income + income_tax) / NULLIF(operating_profit + interest_expense, 0)
+            * (operating_profit + interest_expense) / NULLIF(revenue, 0)
+            * (revenue / NULLIF(assets, 0))
+            * (assets / NULLIF(equity, 0)) AS dupont_roe5     -- 五因子验证 ROE
     FROM base_panel
 ),
 growth AS (
@@ -95,7 +128,22 @@ growth AS (
                 + 3.3 * (operating_profit + interest_expense) / NULLIF(assets, 0)
                 + 0.6 * equity_mv / NULLIF(debt, 0)
                 + 1.0 * revenue / NULLIF(assets, 0)
-        END AS altman_z
+        END AS altman_z,
+        -- Ohlson (1980) O-score 破产预测模型（全行业适用；size 项以 ln(总资产) 代 ln(TA/GNP)，学术常用简化）：
+        -- O = -1.32 - 0.407·lnTA + 6.03·TL/TA - 1.43·WC/TA + 0.0757·CL/CA - 1.72·1[TL>TA]
+        --     - 2.37·NI/TA - 1.83·OCF/TL + 0.285·1[NI<0] - 0.521·CHIN；O 越大破产概率越高
+        -1.32
+        - 0.407 * (CASE WHEN assets > 0 THEN LN(assets) END)
+        + 6.03 * debt / NULLIF(assets, 0)
+        - 1.43 * (current_assets - current_liabilities) / NULLIF(assets, 0)
+        + 0.0757 * current_liabilities / NULLIF(current_assets, 0)
+        - 1.72 * CASE WHEN debt > assets THEN 1.0 ELSE 0.0 END
+        - 2.37 * net_income / NULLIF(assets, 0)
+        - 1.83 * ocf / NULLIF(debt, 0)
+        + 0.285 * CASE WHEN net_income < 0 THEN 1.0 ELSE 0.0 END
+        - 0.521 * (net_income - LAG(net_income, 1) OVER w)
+                  / NULLIF(ABS(net_income) + ABS(LAG(net_income, 1) OVER w), 0)
+        AS ohlson_o
     FROM ratios
     WINDOW w AS (PARTITION BY stkcd ORDER BY year)
 )
@@ -109,6 +157,17 @@ SELECT
         WHEN altman_z < 2.99 THEN '灰色区'
         ELSE '安全区'
     END AS altman_risk,
+    -- 新兴市场 Z'' 风险分区：<1.1 危险区，1.1-2.6 灰色区，>2.6 安全区
+    CASE
+        WHEN altman_z_em IS NULL THEN NULL
+        WHEN altman_z_em < 1.1 THEN '危险区'
+        WHEN altman_z_em < 2.6 THEN '灰色区'
+        ELSE '安全区'
+    END AS altman_risk_em,
+    -- Ohlson O-score 对应破产概率 P = 1/(1+e^(-O))，直观展示违约可能性
+    CASE WHEN ohlson_o IS NULL THEN NULL
+         ELSE 1.0 / (1.0 + EXP(-ohlson_o))
+    END AS ohlson_pd,
     LAG(roa, 1) OVER w       AS lag_roa,
     LAG(roa, 2) OVER w       AS lag2_roa,
     LAG(roe, 1) OVER w       AS lag_roe,

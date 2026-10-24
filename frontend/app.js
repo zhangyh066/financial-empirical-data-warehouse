@@ -46,6 +46,12 @@ $$('.nav-tab').forEach(tab => {
         if (tab.dataset.tab === 'dict' && !dictLoaded) {
             loadDict();
         }
+        if (tab.dataset.tab === 'industry') {
+            loadIndustryMarket();
+        }
+        if (tab.dataset.tab === 'compare' && !compareInited) {
+            initCompare();
+        }
     });
 });
 
@@ -1280,3 +1286,506 @@ if (btnDlAlignCsv) {
         document.body.removeChild(link);
     });
 }
+
+
+// ─────────────────────────────────────────────
+// 14. 行业与市场页：市场概览 / 行业趋势 / 变量覆盖热力图
+// ─────────────────────────────────────────────
+const PALETTE = ['#1E3A5F', '#B25E00', '#059669', '#7C3AED', '#DC2626', '#0891B2', '#65A30D', '#DB2777', '#92400E', '#4F46E5', '#0F766E', '#A16207'];
+let chartMarketTrend = null;
+let chartIndustryTrend = null;
+let marketOverviewCache = null;
+let industryMarketLoaded = false;
+
+function renderMarketTrend() {
+    if (!marketOverviewCache || !marketOverviewCache.length) return;
+    const metric = $('#mkt-metric-select').value;
+    const labels = marketOverviewCache.map(d => d.year);
+    const fmtPct = metric.startsWith('avg_') && ['avg_roa', 'avg_roe', 'avg_leverage', 'avg_revenue_growth'].includes(metric);
+    const data = marketOverviewCache.map(d => d[metric]);
+
+    if (chartMarketTrend) chartMarketTrend.destroy();
+    chartMarketTrend = new Chart($('#chart-market-trend'), {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: $('#mkt-metric-select').selectedOptions[0].text,
+                data,
+                borderColor: '#1E3A5F',
+                backgroundColor: 'rgba(30,58,95,0.08)',
+                fill: true, tension: 0.3, pointRadius: 4, borderWidth: 2,
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            scales: {
+                x: { grid: { display: false } },
+                y: {
+                    grid: { color: '#F0F0F0' },
+                    ticks: { callback: v => fmtPct ? (v * 100).toFixed(1) + '%' : fmtInt(v) }
+                }
+            }
+        }
+    });
+}
+
+async function renderIndustryTrend() {
+    const checked = [...$$('#ind-checkbox-list input:checked')].map(cb => cb.value);
+    const metric = $('#trend-metric-select').value;
+    if (!checked.length) return;
+    try {
+        const qs = `metrics=${metric}&industries=${encodeURIComponent(checked.join(','))}`;
+        const rows = await fetchJson(`${API}/api/industry-trend?${qs}`);
+        const byInd = new Map();
+        rows.forEach(r => {
+            if (!byInd.has(r.industry)) byInd.set(r.industry, []);
+            byInd.get(r.industry).push(r);
+        });
+        if (chartIndustryTrend) chartIndustryTrend.destroy();
+        chartIndustryTrend = new Chart($('#chart-industry-trend'), {
+            type: 'line',
+            data: {
+                labels: [...new Set(rows.map(r => r.year))].sort(),
+                datasets: [...byInd.entries()].map(([ind, pts], i) => ({
+                    label: ind,
+                    data: pts.map(p => p[metric]),
+                    borderColor: PALETTE[i % PALETTE.length],
+                    backgroundColor: PALETTE[i % PALETTE.length],
+                    tension: 0.3, pointRadius: 3, borderWidth: 2,
+                }))
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } },
+                scales: {
+                    x: { grid: { display: false } },
+                    y: { grid: { color: '#F0F0F0' }, ticks: { callback: v => Math.abs(v) >= 1e8 ? (v / 1e8).toFixed(0) + '亿' : fmt(v, 3) } }
+                }
+            }
+        });
+    } catch (err) {
+        console.warn('行业趋势加载失败', err);
+    }
+}
+
+async function loadCoverage() {
+    const thead = $('#coverage-thead');
+    const tbody = $('#coverage-tbody');
+    try {
+        const data = await fetchJson(`${API}/api/coverage`);
+        thead.innerHTML = '<tr><th style="text-align:left;">变量</th>' +
+            data.years.map(y => `<th>${y}</th>`).join('') + '</tr>';
+        tbody.innerHTML = '';
+        data.variables.forEach(v => {
+            const tr = document.createElement('tr');
+            let html = `<td style="text-align:left;font-size:0.76rem;" title="${v.label}">${v.variable}</td>`;
+            data.years.forEach(y => {
+                const pct = v.coverage[y];
+                if (pct === undefined) { html += '<td>—</td>'; return; }
+                const alpha = Math.max(0.06, pct * 0.85);
+                const fg = pct > 0.55 ? '#FFFFFF' : 'var(--text-primary)';
+                html += `<td style="background:rgba(30,58,95,${alpha.toFixed(2)});color:${fg};font-family:var(--font-mono);font-size:0.72rem;">${(pct * 100).toFixed(0)}%</td>`;
+            });
+            tr.innerHTML = html;
+            tbody.appendChild(tr);
+        });
+    } catch (_) {
+        tbody.innerHTML = '<tr><td style="text-align:center;color:var(--red);">覆盖矩阵加载失败</td></tr>';
+    }
+}
+
+async function loadIndustryMarket() {
+    if (industryMarketLoaded) return;
+    try {
+        const [mkt, inds] = await Promise.all([
+            fetchJson(`${API}/api/market-overview`),
+            fetchJson(`${API}/api/industry`),
+        ]);
+        marketOverviewCache = mkt;
+        const last = mkt[mkt.length - 1];
+        $('#mkt-firms').textContent = fmtInt(last.n_firms);
+        $('#mkt-revenue').textContent = fmtBig(last.total_revenue);
+        $('#mkt-roa').textContent = (last.avg_roa * 100).toFixed(2) + '%';
+        $('#mkt-lev').textContent = (last.avg_leverage * 100).toFixed(1) + '%';
+
+        renderMarketTrend();
+
+        const wrap = $('#ind-checkbox-list');
+        wrap.innerHTML = inds.slice(0, 8).map((d, i) =>
+            `<label class="checkbox-label" style="margin:2px 12px 2px 0;"><input type="checkbox" value="${d.industry}" ${i < 3 ? 'checked' : ''}><span>${d.industry} (${d.n_firms})</span></label>`
+        ).join('');
+
+        loadCoverage();
+        industryMarketLoaded = true;
+    } catch (err) {
+        console.warn('行业与市场页加载失败', err);
+    }
+    renderIndustryTrend();
+}
+
+$('#mkt-metric-select').addEventListener('change', renderMarketTrend);
+$('#trend-metric-select').addEventListener('change', renderIndustryTrend);
+$('#btn-trend-refresh').addEventListener('click', renderIndustryTrend);
+
+
+// ─────────────────────────────────────────────
+// 15. 财务体检页：雷达 / 预警趋势 / 杜邦 / 报表结构 / 瀑布 / 打印
+// ─────────────────────────────────────────────
+let healthDataCache = null;
+let chartHealthRadar = null, chartHealthRisk = null;
+let chartHealthAsset = null, chartHealthFunding = null, chartHealthWaterfall = null;
+
+async function runHealthSearch() {
+    const q = $('#health-search-input').value.trim().toLowerCase();
+    const empty = $('#health-empty');
+    if (!q) return;
+    if (!allCompanies.length) await loadCompanies();
+    const hit = allCompanies.find(c => c.stkcd === q)
+        || allCompanies.find(c => c.stkcd.startsWith(q))
+        || allCompanies.find(c => (c.company_name || '').toLowerCase().includes(q));
+    if (!hit) {
+        $('#health-report').style.display = 'none';
+        empty.style.display = 'block';
+        empty.textContent = `🔍 未找到匹配「${q}」的企业`;
+        return;
+    }
+    loadHealthReport(hit.stkcd);
+}
+
+async function loadHealthReport(stkcd) {
+    const empty = $('#health-empty');
+    empty.style.display = 'block';
+    empty.textContent = '⏳ 正在生成体检报告…';
+    try {
+        const data = await fetchJson(`${API}/api/health/${stkcd}`);
+        healthDataCache = data;
+        empty.style.display = 'none';
+        $('#health-report').style.display = 'block';
+
+        // ── 报告头 ──
+        $('#health-company-name').textContent = `${data.company_name}（${data.stkcd}）`;
+        $('#health-company-meta').textContent =
+            `${data.industry_code ?? '—'} · ${data.industry_category} ｜ 上市 ${data.list_date ?? '—'} ｜ 体检年度 ${data.latest_year} ｜ 同行业 ${data.n_industry_firms} 家`;
+
+        renderHealthRadar(data);
+        renderHealthRisk(data);
+        renderHealthDupont(data);
+        renderHealthStructure(data);
+        renderHealthWaterfall(data.latest_year);
+    } catch (err) {
+        $('#health-report').style.display = 'none';
+        empty.style.display = 'block';
+        empty.textContent = '⚠️ 体检报告生成失败：' + err.message;
+    }
+}
+
+function renderHealthRadar(data) {
+    const dims = data.radar;
+    $('#health-radar-sub').textContent = `${data.company_name} 在「${data.industry_category}」内的分位（${data.latest_year} 年，行业中位数 = 50）`;
+    if (chartHealthRadar) chartHealthRadar.destroy();
+    chartHealthRadar = new Chart($('#chart-health-radar'), {
+        type: 'radar',
+        data: {
+            labels: dims.map(d => d.dimension),
+            datasets: [
+                {
+                    label: '公司（行业分位）',
+                    data: dims.map(d => d.percentile == null ? null : +(d.percentile * 100).toFixed(1)),
+                    borderColor: '#1E3A5F', backgroundColor: 'rgba(30,58,95,0.18)',
+                    pointBackgroundColor: '#1E3A5F', borderWidth: 2,
+                },
+                {
+                    label: '行业中位数 (50)',
+                    data: dims.map(() => 50),
+                    borderColor: '#B25E00', backgroundColor: 'rgba(178,94,0,0.06)',
+                    borderDash: [5, 4], borderWidth: 1.5, pointRadius: 0,
+                },
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } },
+            scales: { r: { min: 0, max: 100, ticks: { stepSize: 25, font: { size: 10 } }, grid: { color: '#E5E7EB' }, angleLines: { color: '#E5E7EB' }, pointLabels: { font: { size: 12 } } } }
+        }
+    });
+
+    const tbody = $('#health-radar-tbody');
+    tbody.innerHTML = '';
+    dims.forEach(d => {
+        const pct = d.percentile;
+        const pctColor = pct == null ? 'var(--text-muted)' : (pct >= 0.5 ? 'var(--green)' : 'var(--red)');
+        tbody.insertAdjacentHTML('beforeend', `
+            <tr>
+                <td style="text-align:left;">${d.dimension}</td>
+                <td>${fmt(d.company, 4)}</td>
+                <td>${fmt(d.industry_median, 4)}</td>
+                <td style="color:${pctColor};font-weight:600;">${pct == null ? '—' : (pct * 100).toFixed(1) + '%'}</td>
+            </tr>`);
+    });
+}
+
+function renderHealthRisk(data) {
+    const years = data.panel.map(r => r.year);
+    if (chartHealthRisk) chartHealthRisk.destroy();
+    chartHealthRisk = new Chart($('#chart-health-risk'), {
+        type: 'line',
+        data: {
+            labels: years,
+            datasets: [
+                { label: "Altman Z", data: data.panel.map(r => r.altman_z), borderColor: '#1E3A5F', borderWidth: 2, tension: 0.25, pointRadius: 3, spanGaps: false },
+                { label: "Altman Z''（新兴市场）", data: data.panel.map(r => r.altman_z_em), borderColor: '#059669', borderWidth: 2, tension: 0.25, pointRadius: 3, spanGaps: false },
+                { label: 'Z 危险线 1.81', data: years.map(() => 1.81), borderColor: '#DC2626', borderDash: [4, 4], borderWidth: 1, pointRadius: 0 },
+                { label: "Z'' 危险线 1.1", data: years.map(() => 1.1), borderColor: '#F59E0B', borderDash: [4, 4], borderWidth: 1, pointRadius: 0 },
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } },
+            scales: { x: { grid: { display: false } }, y: { grid: { color: '#F0F0F0' } } }
+        }
+    });
+
+    const tbody = $('#health-ohlson-tbody');
+    tbody.innerHTML = '';
+    data.panel.slice().reverse().forEach(r => {
+        if (r.ohlson_o == null && r.ohlson_pd == null) return;
+        const danger = r.ohlson_pd != null && r.ohlson_pd > 0.5;
+        tbody.insertAdjacentHTML('beforeend', `
+            <tr>
+                <td>${r.year}</td>
+                <td>${fmt(r.ohlson_o, 3)}</td>
+                <td style="font-weight:600;color:${danger ? 'var(--red)' : 'var(--text-primary)'};">${r.ohlson_pd == null ? '—' : (r.ohlson_pd * 100).toFixed(1) + '%'}</td>
+            </tr>`);
+    });
+    if (!tbody.children.length) tbody.innerHTML = '<tr><td colspan="3" style="color:var(--text-muted);text-align:center;">该企业暂无 Ohlson 数据</td></tr>';
+}
+
+function renderHealthDupont(data) {
+    const tbody = $('#health-dupont-tbody');
+    tbody.innerHTML = '';
+    data.panel.slice().reverse().forEach(r => {
+        tbody.insertAdjacentHTML('beforeend', `
+            <tr>
+                <td>${r.year}</td>
+                <td>${fmt(r.roe, 4)}</td>
+                <td>${fmt(r.net_margin, 4)}</td>
+                <td>${fmt(r.total_asset_turnover, 3)}</td>
+                <td>${fmt(r.equity_multiplier, 3)}</td>
+                <td>${fmt(r.dupont_roe, 4)}</td>
+                <td>${fmt(r.dp_tax_burden, 4)}</td>
+                <td>${fmt(r.dp_interest_burden, 4)}</td>
+                <td>${fmt(r.dp_ebit_margin, 4)}</td>
+                <td>${fmt(r.dupont_roe5, 4)}</td>
+            </tr>`);
+    });
+}
+
+const STACK_COLORS = ['#1E3A5F', '#3B6EA5', '#7C9CC4', '#B9CBDE', '#D9E2EC'];
+
+function renderHealthStructure(data) {
+    const years = data.panel.map(r => r.year);
+    const num = v => v == null ? 0 : v;
+    const assetDatasets = [
+        { label: '货币资金', data: data.panel.map(r => num(r.cash)) },
+        { label: '应收账款', data: data.panel.map(r => num(r.accounts_receivable)) },
+        { label: '存货', data: data.panel.map(r => num(r.inventory)) },
+        { label: '其他流动资产', data: data.panel.map(r => num(r.current_assets) - num(r.cash) - num(r.accounts_receivable) - num(r.inventory)) },
+        { label: '非流动资产', data: data.panel.map(r => num(r.assets) - num(r.current_assets)) },
+    ];
+    if (chartHealthAsset) chartHealthAsset.destroy();
+    chartHealthAsset = new Chart($('#chart-health-asset'), {
+        type: 'bar',
+        data: { labels: years, datasets: assetDatasets.map((d, i) => ({ ...d, backgroundColor: STACK_COLORS[i] })) },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: true, position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } },
+                tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtBig(ctx.parsed.y)}` } }
+            },
+            scales: {
+                x: { stacked: true, grid: { display: false } },
+                y: { stacked: true, grid: { color: '#F0F0F0' }, ticks: { callback: v => fmtBig(v) } }
+            }
+        }
+    });
+
+    const fundingDatasets = [
+        { label: '流动负债', data: data.panel.map(r => num(r.current_liabilities)), backgroundColor: '#B25E00' },
+        { label: '非流动负债', data: data.panel.map(r => num(r.debt) - num(r.current_liabilities)), backgroundColor: '#D97706' },
+        { label: '所有者权益', data: data.panel.map(r => num(r.equity)), backgroundColor: '#059669' },
+    ];
+    if (chartHealthFunding) chartHealthFunding.destroy();
+    chartHealthFunding = new Chart($('#chart-health-funding'), {
+        type: 'bar',
+        data: { labels: years, datasets: fundingDatasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: true, position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } },
+                tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtBig(ctx.parsed.y)}` } }
+            },
+            scales: {
+                x: { stacked: true, grid: { display: false } },
+                y: { stacked: true, grid: { color: '#F0F0F0' }, ticks: { callback: v => fmtBig(v) } }
+            }
+        }
+    });
+
+    // 年度选择器（瀑布图用）
+    const sel = $('#health-year-select');
+    sel.innerHTML = data.panel.slice().reverse().map(r => `<option value="${r.year}">${r.year} 年</option>`).join('');
+}
+
+function renderHealthWaterfall(year) {
+    const r = healthDataCache.panel.find(p => p.year === Number(year));
+    if (!r) return;
+    const seg = (a, b) => [Math.min(a ?? 0, b ?? 0), Math.max(a ?? 0, b ?? 0)];
+    const bars = [
+        { label: '营业收入', range: seg(0, r.revenue), color: '#1E3A5F', value: r.revenue },
+        { label: '营业成本', range: seg(r.operating_profit, r.revenue), color: '#DC2626', value: -(r.revenue - r.operating_profit) },
+        { label: '营业利润', range: seg(0, r.operating_profit), color: '#3B6EA5', value: r.operating_profit },
+        { label: '净利润', range: seg(0, r.net_income), color: '#059669', value: r.net_income },
+    ];
+    if (chartHealthWaterfall) chartHealthWaterfall.destroy();
+    chartHealthWaterfall = new Chart($('#chart-health-waterfall'), {
+        type: 'bar',
+        data: {
+            labels: bars.map(b => b.label),
+            datasets: [{
+                data: bars.map(b => b.range),
+                backgroundColor: bars.map(b => b.color),
+                borderRadius: 2, barPercentage: 0.55,
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: ctx => {
+                            const b = bars[ctx.dataIndex];
+                            return `${b.label}: ${fmtBig(b.value)}`;
+                        }
+                    }
+                }
+            },
+            scales: { x: { grid: { display: false } }, y: { grid: { color: '#F0F0F0' }, ticks: { callback: v => fmtBig(v) } } }
+        }
+    });
+}
+
+$('#health-search-btn').addEventListener('click', runHealthSearch);
+$('#health-search-input').addEventListener('keydown', e => { if (e.key === 'Enter') runHealthSearch(); });
+$('#health-year-select').addEventListener('change', e => renderHealthWaterfall(e.target.value));
+$('#btn-health-print').addEventListener('click', () => {
+    document.body.classList.add('printing-health');
+    window.print();
+    setTimeout(() => document.body.classList.remove('printing-health'), 800);
+});
+
+
+// ─────────────────────────────────────────────
+// 16. 公司对比页：搜索加入 + 指标叠加
+// ─────────────────────────────────────────────
+let compareInited = false;
+let compareSelected = [];   // [{stkcd, name}]
+let chartCompare = null;
+
+function initCompare() {
+    compareInited = true;
+    if (!allCompanies.length) loadCompanies();
+    renderCompareChips();
+}
+
+function renderCompareChips() {
+    const wrap = $('#compare-chips');
+    wrap.innerHTML = compareSelected.map((c, i) => `
+        <span class="chip" style="border-left:4px solid ${PALETTE[i % PALETTE.length]};">
+            ${c.stkcd} ${c.name}
+            <span class="chip-x" data-i="${i}" title="移除">×</span>
+        </span>`).join('');
+    wrap.querySelectorAll('.chip-x').forEach(x => x.addEventListener('click', () => {
+        compareSelected.splice(Number(x.dataset.i), 1);
+        renderCompareChips();
+        loadCompare();
+    }));
+}
+
+function showCompareSuggest(q) {
+    const box = $('#compare-suggest');
+    if (!q) { box.style.display = 'none'; return; }
+    const hits = allCompanies
+        .filter(c => c.stkcd.includes(q) || (c.company_name || '').toLowerCase().includes(q))
+        .filter(c => !compareSelected.some(s => s.stkcd === c.stkcd))
+        .slice(0, 8);
+    if (!hits.length) { box.style.display = 'none'; return; }
+    box.innerHTML = hits.map(h =>
+        `<div class="suggest-item" data-code="${h.stkcd}" data-name="${h.company_name || h.stkcd}">
+            <span style="font-family:var(--font-mono);">${h.stkcd}</span> ${h.company_name || '—'}
+            <span style="color:var(--text-muted);font-size:0.72rem;">${h.industry_category}</span>
+        </div>`).join('');
+    box.style.display = 'block';
+    box.querySelectorAll('.suggest-item').forEach(item => item.addEventListener('click', () => {
+        if (compareSelected.length >= 6) { alert('最多对比 6 家公司'); return; }
+        compareSelected.push({ stkcd: item.dataset.code, name: item.dataset.name });
+        $('#compare-search-input').value = '';
+        box.style.display = 'none';
+        renderCompareChips();
+        loadCompare();
+    }));
+}
+
+async function loadCompare() {
+    if (chartCompare) { chartCompare.destroy(); chartCompare = null; }
+    $('#compare-table-wrap').style.display = 'none';
+    if (compareSelected.length < 1) return;
+    const metric = $('#compare-metric-select').value;
+    try {
+        const codes = compareSelected.map(c => c.stkcd).join(',');
+        const data = await fetchJson(`${API}/api/compare?stkcds=${codes}&variable=${metric}`);
+        const years = [...new Set(data.series.flatMap(s => s.points.map(p => p.year)))].sort();
+        chartCompare = new Chart($('#chart-compare'), {
+            type: 'line',
+            data: {
+                labels: years,
+                datasets: data.series.map((s, i) => ({
+                    label: `${s.stkcd} ${s.company_name}`,
+                    data: years.map(y => { const p = s.points.find(pt => pt.year === y); return p ? p.value : null; }),
+                    borderColor: PALETTE[i % PALETTE.length],
+                    backgroundColor: PALETTE[i % PALETTE.length],
+                    tension: 0.3, pointRadius: 3, borderWidth: 2,
+                }))
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: true, position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } },
+                scales: { x: { grid: { display: false } }, y: { grid: { color: '#F0F0F0' } } }
+            }
+        });
+
+        // 最新值对比表：最新年 / 样本均值
+        const thead = $('#compare-thead');
+        const tbody = $('#compare-tbody');
+        thead.innerHTML = '<tr><th style="text-align:left;">公司</th><th>最新年度</th><th>最新值</th><th>期间均值</th></tr>';
+        tbody.innerHTML = '';
+        data.series.forEach(s => {
+            const valid = s.points.filter(p => p.value != null);
+            const latest = valid[valid.length - 1] || {};
+            const mean = valid.length ? valid.reduce((a, p) => a + p.value, 0) / valid.length : null;
+            tbody.insertAdjacentHTML('beforeend', `
+                <tr>
+                    <td style="text-align:left;">${s.stkcd} ${s.company_name}</td>
+                    <td>${latest.year ?? '—'}</td>
+                    <td style="font-weight:600;">${fmt(latest.value, 4)}</td>
+                    <td>${fmt(mean, 4)}</td>
+                </tr>`);
+        });
+        $('#compare-table-wrap').style.display = 'block';
+    } catch (err) {
+        console.warn('对比加载失败', err);
+    }
+}
+
+$('#compare-search-input').addEventListener('input', e => showCompareSuggest(e.target.value.trim().toLowerCase()));
+$('#compare-metric-select').addEventListener('change', loadCompare);

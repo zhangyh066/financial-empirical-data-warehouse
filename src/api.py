@@ -33,8 +33,8 @@ logger = get_logger("efdw.api")
 # ─────────────────────────────────────────────
 app = FastAPI(
     title="EFDW Financial Data API",
-    description="企业财务实证数据仓库 — 面向财务实证研究的 RESTful API（缩尾/样本筛选/行业聚合/杜邦分析/Altman Z 预警/相关性矩阵）。",
-    version="2.1.0"
+    description="企业财务实证数据仓库 — 面向财务实证研究的 RESTful API（缩尾/样本筛选/行业聚合/杜邦分析/多模型财务预警/应计质量/相关性矩阵）。",
+    version="2.2.0"
 )
 
 # 前端由后端同源托管，CORS 仅放行本机回环地址（本工具仅限本机使用，勿暴露到局域网/公网）
@@ -97,8 +97,23 @@ VARIABLE_META = {
     "cash_conversion_cycle": dict(label="现金转换周期 (天)",          category="营运能力",     formula="365/存货周转率 + 365/应收周转率 - 365/应付周转率"),
     # 现金流能力
     "ocf_to_assets":    dict(label="经营现金流/总资产",               category="现金流能力",   formula="经营活动现金流净额 / 总资产"),
+    "cash_holdings":    dict(label="现金持有比率",                    category="现金流能力",   formula="货币资金 / 总资产"),
+    "fcf_to_assets":    dict(label="简化自由现金流/总资产",           category="现金流能力",   formula="(经营现金流净额 + 投资现金流净额) / 总资产"),
+    # 盈利质量与应计（盈余管理研究核心）
+    "accruals_to_assets": dict(label="总应计/总资产",                category="盈利质量与应计", formula="(净利润 - 经营现金流净额) / 总资产"),
+    # 融资约束
+    "firm_age":         dict(label="上市年限 (Age)",                 category="融资约束",     formula="year - 上市年份"),
+    "sa_index":         dict(label="SA 融资约束指数",                category="融资约束",     formula="-0.737·Size + 0.043·Size² - 0.040·Age（Size=ln(总资产/百万)，绝对值越大约束越强）"),
     # 财务风险预警
     "altman_z":         dict(label="Altman Z 值（财务困境预警）",     category="财务风险预警", formula="1.2X₁ + 1.4X₂ + 3.3X₃ + 0.6X₄ + 1.0X₅（非金融企业适用）"),
+    "altman_z_em":      dict(label="Altman Z''（新兴市场版）",        category="财务风险预警", formula="6.56·WC/TA + 3.26·RE/TA + 6.72·EBIT/TA + 1.05·账面权益/总负债（非金融企业适用）"),
+    "ohlson_o":         dict(label="Ohlson O-score（破产预测）",      category="财务风险预警", formula="-1.32 - 0.407lnTA + 6.03TL/TA - 1.43WC/TA + 0.0757CL/CA - 1.72·1[TL>TA] - 2.37NI/TA - 1.83OCF/TL + 0.285·1[NI<0] - 0.521·CHIN（越大越危险）"),
+    "ohlson_pd":        dict(label="Ohlson 破产概率 P",              category="财务风险预警", formula="1 / (1 + e^(-O))，O 为 Ohlson O-score"),
+    # 杜邦分解（五因素）
+    "dp_tax_burden":    dict(label="杜邦·税负担因子 NI/EBT",         category="杜邦分解",     formula="净利润 / (净利润 + 所得税费用)"),
+    "dp_interest_burden": dict(label="杜邦·利息负担因子 EBT/EBIT",   category="杜邦分解",     formula="(净利润 + 所得税费用) / (营业利润 + 利息费用)"),
+    "dp_ebit_margin":   dict(label="杜邦·EBIT 利润率",               category="杜邦分解",     formula="(营业利润 + 利息费用) / 营业收入"),
+    "dupont_roe5":      dict(label="五因素杜邦验证 ROE",             category="杜邦分解",     formula="税负担 × 利息负担 × EBIT利润率 × 周转率 × 权益乘数（应 ≈ roe）"),
     # 多期滞后 / 超前项
     "lag_roa":          dict(label="L.ROA (滞后一期)",                category="滞后与超前项", formula="LAG(roa, 1) OVER (PARTITION BY stkcd ORDER BY year)"),
     "lag2_roa":         dict(label="L2.ROA (滞后两期)",               category="滞后与超前项", formula="LAG(roa, 2) OVER (PARTITION BY stkcd ORDER BY year)"),
@@ -1031,6 +1046,231 @@ def resolve_company_names(request: ResolveRequest):
         })
 
     return results
+
+
+# ─────────────────────────────────────────────
+# API: 18. Variable Coverage Heatmap（变量 × 年度 非缺失率矩阵）
+# ─────────────────────────────────────────────
+@app.get("/api/coverage")
+def get_coverage():
+    """各研究变量逐年的非缺失率（选样本窗口前先看数据够不够）"""
+    conn = get_conn()
+    try:
+        panel_cols = {
+            r[0] for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'dws' AND table_name = 'firm_year_panel'"
+            ).fetchall()
+        }
+        vars_in_panel = [v for v in NUMERIC_VARS if v in panel_cols]
+        if not vars_in_panel:
+            raise HTTPException(status_code=500, detail="面板表缺少研究变量列")
+        counts_sql = ", ".join(f"COUNT({v}) AS n_{v}" for v in vars_in_panel)
+        df = conn.execute(
+            f"SELECT year, COUNT(*) AS n_total, {counts_sql} "
+            f"FROM dws.firm_year_panel GROUP BY year ORDER BY year"
+        ).fetchdf()
+    finally:
+        conn.close()
+
+    years = [int(y) for y in df["year"]]
+    variables = []
+    for v in vars_in_panel:
+        cov = {
+            str(int(y)): round(float(df.iloc[i][f"n_{v}"]) / float(df.iloc[i]["n_total"]), 4)
+            for i, y in enumerate(df["year"])
+        }
+        variables.append({"variable": v, "label": NUMERIC_VARS[v], "coverage": cov})
+    return {"years": [str(y) for y in years], "n_obs": [int(n) for n in df["n_total"]], "variables": variables}
+
+
+# ─────────────────────────────────────────────
+# API: 19. Market Year Overview（全市场年度概览，ADS 表首次上 API）
+# ─────────────────────────────────────────────
+@app.get("/api/market-overview")
+def get_market_overview():
+    """全市场逐年概览：企业数 / 总资产 / 总营收 / 平均 ROA、ROE、杠杆率等"""
+    conn = get_conn()
+    try:
+        rows = conn.execute("""
+            SELECT year, n_firms, n_obs, total_assets, total_revenue, total_net_income,
+                   avg_roa, avg_roe, avg_leverage, avg_revenue_growth
+            FROM ads.market_year_overview ORDER BY year
+        """).fetchall()
+        cols = ["year", "n_firms", "n_obs", "total_assets", "total_revenue", "total_net_income",
+                "avg_roa", "avg_roe", "avg_leverage", "avg_revenue_growth"]
+        return [dict(zip(cols, r)) for r in rows]
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────
+# API: 20. Industry Trend（行业-年度指标时序，ADS 表首次上 API）
+# ─────────────────────────────────────────────
+INDUSTRY_TREND_METRICS = {
+    "n_firms", "avg_roa", "avg_roe", "avg_gross_margin", "avg_leverage",
+    "avg_revenue_growth", "avg_current_ratio", "avg_total_asset_turnover",
+    "total_revenue", "total_net_income",
+}
+
+
+@app.get("/api/industry-trend")
+def get_industry_trend(
+    metrics: str = Query(default="avg_roa,avg_leverage"),
+    industries: str | None = Query(default=None),
+):
+    """行业 × 年度 指标时序（支持过滤行业子集），支撑行业趋势对比图"""
+    sel_metrics = [m.strip() for m in metrics.split(",") if m.strip() in INDUSTRY_TREND_METRICS]
+    if not sel_metrics:
+        raise HTTPException(status_code=400, detail=f"至少需要一个有效指标（可选：{', '.join(sorted(INDUSTRY_TREND_METRICS))}）")
+
+    conditions, params = [], []
+    if industries:
+        sel_inds = [i.strip() for i in industries.split(",") if i.strip()]
+        if sel_inds:
+            conditions.append("industry_category IN (" + ",".join("?" for _ in sel_inds) + ")")
+            params.extend(sel_inds)
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    cols = ", ".join(["industry_category", "year", *sel_metrics])
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT {cols} FROM ads.industry_year_stats {where} "
+            f"ORDER BY industry_category, year", params
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(zip(["industry", "year", *sel_metrics], r)) for r in rows]
+
+
+# ─────────────────────────────────────────────
+# API: 21. Multi-Company Comparison（多公司指标叠加对比）
+# ─────────────────────────────────────────────
+@app.get("/api/compare")
+def compare_companies(
+    stkcds: str = Query(default=""),
+    variable: str = Query(default="roa"),
+):
+    """多家公司（≤6 家）同一指标逐年叠加对比"""
+    if variable not in NUMERIC_VARS:
+        raise HTTPException(status_code=400, detail=f"不支持的变量: {variable}")
+    codes = [c.strip() for c in stkcds.split(",") if c.strip()][:6]
+    if not codes:
+        raise HTTPException(status_code=400, detail="至少提供一家公司的股票代码（逗号分隔）")
+
+    conn = get_conn()
+    try:
+        ph = ",".join("?" for _ in codes)
+        rows = conn.execute(
+            f"SELECT stkcd, company_name, year, {variable} "
+            f"FROM dws.firm_year_panel WHERE stkcd IN ({ph}) ORDER BY stkcd, year",
+            codes,
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        raise HTTPException(status_code=404, detail="未找到任何指定公司的数据")
+
+    series: dict[str, dict] = {}
+    for stkcd, name, year, val in rows:
+        s = series.setdefault(stkcd, {"stkcd": stkcd, "company_name": name, "points": []})
+        s["points"].append({"year": int(year), "value": None if val is None else round(float(val), 4)})
+    return {"variable": variable, "label": NUMERIC_VARS[variable],
+            "series": list(series.values())}
+
+
+# ─────────────────────────────────────────────
+# API: 22. Company Health Report（单公司财务体检报告数据包）
+# ─────────────────────────────────────────────
+HEALTH_RADAR_VARS = [
+    ("盈利能力", "roa"),
+    ("偿债能力", "current_ratio"),
+    ("营运能力", "total_asset_turnover"),
+    ("成长能力", "revenue_growth"),
+    ("现金流能力", "ocf_to_assets"),
+]
+
+HEALTH_PANEL_COLS = (
+    "year, roa, roe, current_ratio, total_asset_turnover, revenue_growth, ocf_to_assets, "
+    "altman_z, altman_z_em, altman_risk, altman_risk_em, ohlson_o, ohlson_pd, "
+    "dupont_roe, dupont_roe5, dp_tax_burden, dp_interest_burden, dp_ebit_margin, "
+    "net_margin, equity_multiplier, "
+    "assets, current_assets, cash, accounts_receivable, inventory, fixed_assets, "
+    "debt, current_liabilities, equity, revenue, operating_cost, operating_profit, "
+    "net_income, ocf, invest_cf, finance_cf, income_tax"
+)
+
+
+@app.get("/api/health/{stkcd}")
+def get_health_report(stkcd: str):
+    """财务体检报告数据包：五大能力雷达（公司 vs 行业中位数与分位）、
+    多模型预警趋势（Z / Z'' / Ohlson P）、三/五因素杜邦、报表结构科目时序"""
+    conn = get_conn()
+    try:
+        info = conn.execute(
+            "SELECT stkcd, company_name, industry_code, industry_category, list_date "
+            "FROM dws.firm_year_panel WHERE stkcd = ? LIMIT 1", [stkcd]
+        ).fetchone()
+        if info is None:
+            raise HTTPException(status_code=404, detail=f"未找到公司 {stkcd}")
+
+        panel = conn.execute(
+            f"SELECT {HEALTH_PANEL_COLS} FROM dws.firm_year_panel "
+            f"WHERE stkcd = ? ORDER BY year", [stkcd]
+        ).fetchdf()
+
+        industry = info[3]
+        latest_year = int(panel["year"].max())
+
+        med_cols = ", ".join(f"MEDIAN({v}) AS med_{v}" for _, v in HEALTH_RADAR_VARS)
+        agg = conn.execute(
+            f"SELECT year, {med_cols} FROM dws.firm_year_panel "
+            f"WHERE industry_category = ? GROUP BY year ORDER BY year", [industry]
+        ).fetchdf()
+
+        pct_sel = ", ".join(
+            f"percent_rank() OVER (ORDER BY {v}) AS p_{v}" for _, v in HEALTH_RADAR_VARS
+        )
+        pct_row = conn.execute(
+            f"SELECT p_roa, p_current_ratio, p_total_asset_turnover, p_revenue_growth, p_ocf_to_assets "
+            f"FROM (SELECT stkcd, {pct_sel} FROM dws.firm_year_panel "
+            f"      WHERE industry_category = ? AND year = ?) t WHERE stkcd = ?",
+            [industry, latest_year, stkcd],
+        ).fetchone()
+
+        n_industry_firms = conn.execute(
+            "SELECT COUNT(DISTINCT stkcd) FROM dws.firm_year_panel "
+            "WHERE industry_category = ? AND year = ?", [industry, latest_year]
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    latest = panel[panel["year"] == latest_year].iloc[0]
+    med_latest = agg[agg["year"] == latest_year].iloc[0] if not agg[agg["year"] == latest_year].empty else None
+
+    radar = []
+    for i, (label, var) in enumerate(HEALTH_RADAR_VARS):
+        company_v = latest.get(var)
+        med_v = med_latest.get(f"med_{var}") if med_latest is not None else None
+        pct = pct_row[i] if pct_row is not None else None
+        radar.append({
+            "dimension": label, "variable": var,
+            "company": None if pd.isna(company_v) else round(float(company_v), 4),
+            "industry_median": None if med_v is None or pd.isna(med_v) else round(float(med_v), 4),
+            "percentile": None if pct is None else round(float(pct), 4),
+        })
+
+    panel_records = panel.replace({np.nan: None}).to_dict(orient="records")
+    return {
+        "stkcd": info[0], "company_name": info[1], "industry_code": info[2],
+        "industry_category": info[3],
+        "list_date": str(info[4]) if info[4] is not None else None,
+        "latest_year": latest_year,
+        "n_industry_firms": int(n_industry_firms),
+        "radar": radar,
+        "panel": panel_records,
+    }
 
 
 # ─────────────────────────────────────────────

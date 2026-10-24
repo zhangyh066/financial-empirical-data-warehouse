@@ -953,3 +953,164 @@ tbody tr:hover { background: var(--bg-hover); }
     border: 1px solid rgba(220, 38, 38, 0.15);
 }
 
+
+
+/* ═══════════════════════════════════════════════
+   行业与市场 / 财务体检 / 公司对比（新增页面）
+   ═══════════════════════════════════════════════ */
+
+.trend-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
+}
+
+.ind-checkbox-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 0;
+    flex: 1 1 100%;
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+}
+
+.coverage-wrap {
+    max-height: 480px;
+    overflow: auto;
+}
+
+.coverage-table th,
+.coverage-table td {
+    padding: 4px 10px;
+    text-align: center;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border);
+}
+
+.coverage-table th:first-child,
+.coverage-table td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--bg-card, #fff);
+    z-index: 1;
+}
+
+/* ── 财务体检 ── */
+.health-empty {
+    border: 2px dashed var(--border-dark, var(--border));
+    border-radius: var(--radius);
+    padding: var(--sp-10) var(--sp-6);
+    text-align: center;
+    color: var(--text-muted);
+    background: var(--bg-card, var(--bg));
+}
+
+.health-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-4);
+    flex-wrap: wrap;
+}
+
+.health-header-main h2 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: var(--sp-1);
+}
+
+.health-company-meta {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+/* ── 公司对比 ── */
+.compare-controls {
+    display: flex;
+    gap: var(--sp-3);
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.compare-suggest {
+    margin-top: var(--sp-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: #fff;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+    max-width: 520px;
+}
+
+.suggest-item {
+    padding: 8px 14px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+}
+
+.suggest-item:hover {
+    background: var(--accent-bg, #EEF2F7);
+}
+
+.chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
+}
+
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.chip-x {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-weight: 700;
+    padding: 0 2px;
+}
+
+.chip-x:hover {
+    color: var(--red);
+}
+
+/* ── 体检报告打印 / 导出 PDF：仅打印报告区 ── */
+@media print {
+    body.printing-health * {
+        visibility: hidden;
+    }
+
+    body.printing-health #panel-health,
+    body.printing-health #panel-health * {
+        visibility: visible;
+    }
+
+    body.printing-health #panel-health {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        overflow: visible;
+    }
+
+    body.printing-health .chart-container {
+        height: 320px !important;
+        page-break-inside: avoid;
+    }
+}

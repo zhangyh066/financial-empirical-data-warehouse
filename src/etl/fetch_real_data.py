@@ -58,10 +58,21 @@ FIN_COLS = [
     "F010101A", "F010201A", "F010301A", "F010401A",  # 资产/负债/权益/留存收益
     "F010701A", "F010801A",                          # 流动资产/流动负债
     "F011001A", "F011101A", "F011201A", "F011301A",  # 存货/应收/货币资金/应付
+    "F010901A",                                      # 固定资产净额（报表结构）
     "F020101A", "F020201A", "F020301A", "F020401A",  # 营收/营业成本/营业利润/利息费用
+    "F020501A",                                      # 所得税费用（五因素杜邦）
     "F030101A", "F040101A",                          # 净利润/经营现金流
+    "F040201A", "F040301A",                          # 投资/筹资活动现金流净额（现金流三段分解）
     "F100101C",                                      # 股权市值
 ]
+
+
+def pick_col(df, candidates):
+    """按候选列名顺序取第一个存在的列；都不在则返回 None（接口列名随版本漂移时自动降级）"""
+    for c in candidates:
+        if c in df.columns:
+            return df[c]
+    return None
 
 # ─────────────────────────────────────────────
 # 网络工具：带重试
@@ -245,6 +256,7 @@ def fetch_statements_year(year: int) -> pd.DataFrame:
     ]:
         m[col] = to_num(bs[src])
 
+    inc_tax = pick_col(inc, ["所得税费用", "减：所得税费用"])
     inc_m = pd.DataFrame({
         "Stkcd": code_col(inc),
         "F030101A": to_num(inc["净利润"]),
@@ -252,10 +264,19 @@ def fetch_statements_year(year: int) -> pd.DataFrame:
         "F020201A": to_num(inc["营业总支出-营业支出"]),
         "F020301A": to_num(inc["营业利润"]),
     })
+    if inc_tax is not None:
+        inc_m["F020501A"] = to_num(inc_tax)
+
+    cf_inv = pick_col(cf, ["投资性现金流-现金流量净额", "投资活动产生的现金流量净额", "投资性现金净流量-现金流量净额"])
+    cf_fin = pick_col(cf, ["筹资性现金流-现金流量净额", "筹资活动产生的现金流量净额", "筹资性现金净流量-现金流量净额"])
     cf_m = pd.DataFrame({
         "Stkcd": code_col(cf),
         "F040101A": to_num(cf["经营性现金流-现金流量净额"]),
     })
+    if cf_inv is not None:
+        cf_m["F040201A"] = to_num(cf_inv)
+    if cf_fin is not None:
+        cf_m["F040301A"] = to_num(cf_fin)
 
     m = m.merge(inc_m, on="Stkcd", how="outer").merge(cf_m, on="Stkcd", how="outer")
     # 只保留沪深 A 股（排除北交所 4/8 开头与 CDR 689，东财批量接口本身已不含北交所）
@@ -351,25 +372,35 @@ def _enrich_one(code: str, years: set[int]) -> dict | None:
         bs = bs[bs["报告日"].astype(str).str.endswith("1231")].copy()
         bs["year"] = bs["报告日"].astype(str).str[:4].astype(int)
         bs = bs[bs["year"].isin(years)]
+        fixed_col = pick_col(bs, ["固定资产净额", "固定资产合计", "固定资产"])
         for _, r in bs.iterrows():
             re_s = pd.to_numeric(pd.Series([r.get("盈余公积")]), errors="coerce").iloc[0]
             up_s = pd.to_numeric(pd.Series([r.get("未分配利润")]), errors="coerce").iloc[0]
             re_total = None
             if pd.notna(re_s) or pd.notna(up_s):
                 re_total = (re_s if pd.notna(re_s) else 0) + (up_s if pd.notna(up_s) else 0)
-            out.setdefault(int(r["year"]), {}).update({
+            fields = {
                 "F010701A": pd.to_numeric(pd.Series([r.get("流动资产合计")]), errors="coerce").iloc[0],
                 "F010801A": pd.to_numeric(pd.Series([r.get("流动负债合计")]), errors="coerce").iloc[0],
                 "F010401A": re_total,
-            })
+            }
+            if fixed_col is not None:
+                fields["F010901A"] = pd.to_numeric(pd.Series([fixed_col[r.name] if r.name in fixed_col.index else None]), errors="coerce").iloc[0]
+            out.setdefault(int(r["year"]), {}).update(fields)
 
-    if inc is not None and len(inc) and "利息费用" in inc.columns:
+    if inc is not None and len(inc):
         inc = inc[inc["报告日"].astype(str).str.endswith("1231")].copy()
         inc["year"] = inc["报告日"].astype(str).str[:4].astype(int)
         inc = inc[inc["year"].isin(years)]
+        inc_tax_col = pick_col(inc, ["所得税费用", "减：所得税费用"])
         for _, r in inc.iterrows():
-            v = pd.to_numeric(pd.Series([r.get("利息费用")]), errors="coerce").iloc[0]
-            out.setdefault(int(r["year"]), {}).update({"F020401A": v})
+            fields = {}
+            if "利息费用" in inc.columns:
+                fields["F020401A"] = pd.to_numeric(pd.Series([r.get("利息费用")]), errors="coerce").iloc[0]
+            if inc_tax_col is not None:
+                fields["F020501A"] = pd.to_numeric(pd.Series([r.get("所得税费用")]), errors="coerce").iloc[0]
+            if fields:
+                out.setdefault(int(r["year"]), {}).update(fields)
 
     return out
 
@@ -473,7 +504,7 @@ def build_outputs(start_year: int, end_year: int, use_enrich: bool, enrich_worke
             m = m.merge(enrich_df[enrich_df["year"] == y],
                         on=["Stkcd", "year"], how="left")
         else:
-            for c in ("F010701A", "F010801A", "F010401A", "F020401A"):
+            for c in ("F010701A", "F010801A", "F010401A", "F020401A", "F010901A", "F020501A"):
                 m[c] = None
         rows.append(m)
 

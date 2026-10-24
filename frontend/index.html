@@ -34,28 +34,40 @@
                 <span class="tab-num">01</span>
                 <span class="tab-label">样本概览</span>
             </button>
-            <button class="nav-tab" data-tab="company">
+            <button class="nav-tab" data-tab="industry">
                 <span class="tab-num">02</span>
+                <span class="tab-label">行业与市场</span>
+            </button>
+            <button class="nav-tab" data-tab="company">
+                <span class="tab-num">03</span>
                 <span class="tab-label">企业检索</span>
             </button>
+            <button class="nav-tab" data-tab="health">
+                <span class="tab-num">04</span>
+                <span class="tab-label">财务体检</span>
+            </button>
+            <button class="nav-tab" data-tab="compare">
+                <span class="tab-num">05</span>
+                <span class="tab-label">公司对比</span>
+            </button>
             <button class="nav-tab" data-tab="export">
-                <span class="tab-num">03</span>
+                <span class="tab-num">06</span>
                 <span class="tab-label">数据导出</span>
             </button>
             <button class="nav-tab" data-tab="import">
-                <span class="tab-num">04</span>
+                <span class="tab-num">07</span>
                 <span class="tab-label">数据导入</span>
             </button>
             <button class="nav-tab" data-tab="align">
-                <span class="tab-num">05</span>
+                <span class="tab-num">08</span>
                 <span class="tab-label">智能对齐</span>
             </button>
             <button class="nav-tab" data-tab="corr">
-                <span class="tab-num">06</span>
+                <span class="tab-num">09</span>
                 <span class="tab-label">相关矩阵</span>
             </button>
             <button class="nav-tab" data-tab="dict">
-                <span class="tab-num">07</span>
+                <span class="tab-num">10</span>
                 <span class="tab-label">变量字典</span>
             </button>
         </div>
@@ -169,7 +181,10 @@ python src/run_pipeline.py</pre>
                             <option value="current_ratio">流动比率</option>
                             <option value="total_asset_turnover">总资产周转率</option>
                             <option value="interest_coverage">利息保障倍数</option>
+                            <option value="accruals_to_assets">总应计/总资产</option>
+                            <option value="sa_index">SA 融资约束指数</option>
                             <option value="altman_z">Altman Z 值</option>
+                            <option value="altman_z_em">Altman Z''（新兴市场版）</option>
                             <option value="firm_size">Size (企业规模)</option>
                             <option value="tobin_q">Tobin's Q (托宾Q)</option>
                         </select>
@@ -183,7 +198,89 @@ python src/run_pipeline.py</pre>
 
         </section>
 
-        <!-- ═══ Tab 2: Company Search ═══ -->
+        <!-- ═══ Tab 2: Industry & Market ═══ -->
+        <section class="tab-panel" id="panel-industry">
+
+            <!-- Market Overview Cards -->
+            <div class="metric-row" id="market-cards">
+                <div class="metric-card">
+                    <div class="metric-value" id="mkt-firms">—</div>
+                    <div class="metric-label">上市公司数（最新年度）</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="mkt-revenue">—</div>
+                    <div class="metric-label">全市场年度总营收</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="mkt-roa">—</div>
+                    <div class="metric-label">全市场平均 ROA</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="mkt-lev">—</div>
+                    <div class="metric-label">全市场平均资产负债率</div>
+                </div>
+            </div>
+
+            <!-- Market Trend Chart -->
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Market Trend — 全市场年度趋势</h2>
+                    <p class="section-sub">全 A 股整体盈利能力与杠杆水平逐年演变（数据：ads.market_year_overview）</p>
+                </div>
+                <div class="chart-controls">
+                    <select id="mkt-metric-select" class="input-select">
+                        <option value="avg_roa" selected>平均 ROA</option>
+                        <option value="avg_roe">平均 ROE</option>
+                        <option value="avg_leverage">平均资产负债率</option>
+                        <option value="avg_revenue_growth">平均营收增长率</option>
+                    </select>
+                </div>
+                <div class="chart-container">
+                    <canvas id="chart-market-trend"></canvas>
+                </div>
+            </div>
+
+            <!-- Industry Trend -->
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Industry Trend — 行业趋势对比</h2>
+                    <p class="section-sub">勾选行业（默认前三大），选择指标，观察行业间财务指标的时间演变</p>
+                </div>
+                <div class="trend-controls">
+                    <div class="ind-checkbox-list" id="ind-checkbox-list"><!-- JS 渲染 --></div>
+                    <select id="trend-metric-select" class="input-select">
+                        <option value="avg_roa" selected>平均 ROA</option>
+                        <option value="avg_roe">平均 ROE</option>
+                        <option value="avg_gross_margin">平均毛利率</option>
+                        <option value="avg_leverage">平均资产负债率</option>
+                        <option value="avg_revenue_growth">平均营收增长率</option>
+                        <option value="avg_total_asset_turnover">平均总资产周转率</option>
+                        <option value="n_firms">行业内公司数</option>
+                    </select>
+                    <button id="btn-trend-refresh" class="btn btn-primary">刷新图表</button>
+                </div>
+                <div class="chart-container">
+                    <canvas id="chart-industry-trend"></canvas>
+                </div>
+            </div>
+
+            <!-- Coverage Heatmap -->
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Variable Coverage — 变量 × 年度 覆盖热力图</h2>
+                    <p class="section-sub">各研究变量逐年的非缺失率（选样本窗口前先看数据够不够；颜色越深覆盖越高）</p>
+                </div>
+                <div class="table-wrap coverage-wrap">
+                    <table class="coverage-table" id="coverage-table">
+                        <thead id="coverage-thead"></thead>
+                        <tbody id="coverage-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ═══ Tab 3: Company Search ═══ -->
         <section class="tab-panel" id="panel-company">
 
             <div class="section-block">
@@ -288,6 +385,183 @@ python src/run_pipeline.py</pre>
 
         </section>
 
+        <!-- ═══ Tab 4: Financial Health Report ═══ -->
+        <section class="tab-panel" id="panel-health">
+
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Financial Health Report — 财务体检报告</h2>
+                    <p class="section-sub">五大能力雷达（对标行业中位数与分位）、多模型财务预警趋势、三/五因素杜邦分解与报表结构分析，一键打印/导出 PDF</p>
+                </div>
+                <div class="search-bar">
+                    <input type="text" id="health-search-input" class="input-text" placeholder="输入股票代码或名称，例如 000002 或 万科，回车生成体检报告">
+                    <button id="health-search-btn" class="btn btn-primary">生成报告</button>
+                </div>
+                <div class="health-empty" id="health-empty">输入公司代码或名称开始体检</div>
+            </div>
+
+            <div id="health-report" style="display:none;">
+                <!-- 报告头 -->
+                <div class="section-block health-header">
+                    <div class="health-header-main">
+                        <h2 id="health-company-name">—</h2>
+                        <p class="health-company-meta" id="health-company-meta"></p>
+                    </div>
+                    <button id="btn-health-print" class="btn btn-primary">🖨 打印 / 导出 PDF</button>
+                </div>
+
+                <!-- 雷达 + 百分位表 -->
+                <div class="charts-row">
+                    <div class="section-block chart-block">
+                        <div class="section-header">
+                            <h2>五大能力雷达（行业分位）</h2>
+                            <p class="section-sub" id="health-radar-sub">—</p>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="chart-health-radar"></canvas>
+                        </div>
+                    </div>
+                    <div class="section-block chart-block">
+                        <div class="section-header">
+                            <h2>能力明细与行业分位</h2>
+                            <p class="section-sub">百分位 = 公司在同行中的相对位置（0-100%）</p>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="quality-table">
+                                <thead>
+                                    <tr><th>能力维度</th><th>公司值</th><th>行业中位数</th><th>百分位</th></tr>
+                                </thead>
+                                <tbody id="health-radar-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 预警趋势 -->
+                <div class="charts-row">
+                    <div class="section-block chart-block">
+                        <div class="section-header">
+                            <h2>财务预警趋势（Z / Z''）</h2>
+                            <p class="section-sub">Altman Z（&lt;1.81 危险 / 1.81-2.99 灰色）与新兴市场 Z''（&lt;1.1 / 1.1-2.6）；金融企业不适用</p>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="chart-health-risk"></canvas>
+                        </div>
+                    </div>
+                    <div class="section-block chart-block">
+                        <div class="section-header">
+                            <h2>Ohlson 破产概率</h2>
+                            <p class="section-sub">P = 1/(1+e⁻ᴼ)，越大违约风险越高（经验参考 &gt; 0.5 预警）</p>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="quality-table">
+                                <thead><tr><th>年度</th><th>O-score</th><th>破产概率 P</th></tr></thead>
+                                <tbody id="health-ohlson-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 杜邦分解 -->
+                <div class="section-block">
+                    <div class="section-header">
+                        <h2>DuPont Decomposition — 杜邦分解（三因素 / 五因素）</h2>
+                        <p class="section-sub">ROE = 净利率 × 周转 × 权益乘数 = 税负担 × 利息负担 × EBIT利润率 × 周转 × 权益乘数（五因素需所得税数据，缺数据时为 —）</p>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="quality-table" id="health-dupont-table">
+                            <thead>
+                                <tr>
+                                    <th>年度</th><th>ROE</th>
+                                    <th>净利率</th><th>周转率</th><th>权益乘数</th><th>三因素验证</th>
+                                    <th>税负担</th><th>利息负担</th><th>EBIT利润率</th><th>五因素验证</th>
+                                </tr>
+                            </thead>
+                            <tbody id="health-dupont-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 报表结构 -->
+                <div class="charts-row">
+                    <div class="section-block chart-block">
+                        <div class="section-header">
+                            <h2>Balance Sheet — 资产结构堆积图</h2>
+                            <p class="section-sub">货币资金 / 应收 / 存货 / 其他流动 / 非流动资产</p>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="chart-health-asset"></canvas>
+                        </div>
+                    </div>
+                    <div class="section-block chart-block">
+                        <div class="section-header">
+                            <h2>Funding Structure — 资金来源堆积图</h2>
+                            <p class="section-sub">流动负债 / 非流动负债 / 所有者权益</p>
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="chart-health-funding"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-block">
+                    <div class="section-header">
+                        <h2>Income Waterfall — 利润形成瀑布图</h2>
+                        <p class="section-sub">营收 → 扣除营业成本 → 营业利润 → 净利润（选择年度查看）</p>
+                    </div>
+                    <div class="chart-controls">
+                        <select id="health-year-select" class="input-select"></select>
+                    </div>
+                    <div class="chart-container" style="max-width:760px;">
+                        <canvas id="chart-health-waterfall"></canvas>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ═══ Tab 5: Company Comparison ═══ -->
+        <section class="tab-panel" id="panel-compare">
+
+            <div class="section-block">
+                <div class="section-header">
+                    <h2>Company Comparison — 公司对比</h2>
+                    <p class="section-sub">选择 2-6 家公司，叠加对比任意财务指标的逐年走势与最新值</p>
+                </div>
+                <div class="compare-controls">
+                    <div class="search-bar" style="flex:1;">
+                        <input type="text" id="compare-search-input" class="input-text" placeholder="输入代码或名称检索并点击加入（最多 6 家）">
+                    </div>
+                    <select id="compare-metric-select" class="input-select">
+                        <option value="roa" selected>ROA</option>
+                        <option value="roe">ROE</option>
+                        <option value="revenue_growth">营收增长率</option>
+                        <option value="leverage">资产负债率</option>
+                        <option value="gross_margin">毛利率</option>
+                        <option value="current_ratio">流动比率</option>
+                        <option value="total_asset_turnover">总资产周转率</option>
+                        <option value="accruals_to_assets">总应计/总资产</option>
+                        <option value="sa_index">SA 融资约束指数</option>
+                        <option value="altman_z_em">Altman Z''</option>
+                        <option value="ocf_to_assets">经营现金流/总资产</option>
+                        <option value="tobin_q">Tobin's Q</option>
+                    </select>
+                </div>
+                <div class="compare-suggest" id="compare-suggest" style="display:none;"></div>
+                <div class="chip-row" id="compare-chips"></div>
+                <div class="chart-container" style="margin-top:16px;">
+                    <canvas id="chart-compare"></canvas>
+                </div>
+                <div class="table-wrap" id="compare-table-wrap" style="display:none;margin-top:16px;">
+                    <table class="quality-table">
+                        <thead id="compare-thead"></thead>
+                        <tbody id="compare-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </section>
+
         <!-- ═══ Tab 3: Export ═══ -->
         <section class="tab-panel" id="panel-export">
 
@@ -367,9 +641,20 @@ python src/run_pipeline.py</pre>
 
                                 <div class="var-group-label">现金流能力</div>
                                 <label class="checkbox-label"><input type="checkbox" value="ocf_to_assets"><span>经营现金流/总资产</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="cash_holdings"><span>现金持有比率</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="fcf_to_assets"><span>简化自由现金流/总资产</span></label>
+
+                                <div class="var-group-label">盈利质量与应计</div>
+                                <label class="checkbox-label"><input type="checkbox" value="accruals_to_assets"><span>总应计/总资产（盈余管理）</span></label>
+
+                                <div class="var-group-label">融资约束</div>
+                                <label class="checkbox-label"><input type="checkbox" value="sa_index"><span>SA 融资约束指数</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="firm_age"><span>上市年限 Age</span></label>
 
                                 <div class="var-group-label">财务风险预警</div>
                                 <label class="checkbox-label"><input type="checkbox" value="altman_z"><span>Altman Z 值（财务困境预警）</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="altman_z_em"><span>Altman Z''（新兴市场版）</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="ohlson_o"><span>Ohlson O-score（破产预测）</span></label>
 
                                 <div class="var-group-label">多期滞后 / 超前项</div>
                                 <label class="checkbox-label"><input type="checkbox" value="lag_roa"><span>L.ROA (滞后一期)</span></label>
@@ -741,7 +1026,10 @@ python src/run_pipeline.py</pre>
                                 <label class="checkbox-label"><input type="checkbox" value="quick_ratio"><span>速动比率</span></label>
                                 <label class="checkbox-label"><input type="checkbox" value="interest_coverage"><span>利息保障倍数</span></label>
                                 <label class="checkbox-label"><input type="checkbox" value="ocf_to_assets"><span>经营现金流/总资产</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="accruals_to_assets"><span>总应计/总资产</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="sa_index"><span>SA 融资约束指数</span></label>
                                 <label class="checkbox-label"><input type="checkbox" value="altman_z"><span>Altman Z 值</span></label>
+                                <label class="checkbox-label"><input type="checkbox" value="altman_z_em"><span>Altman Z''（新兴市场版）</span></label>
                             </div>
                         </fieldset>
 

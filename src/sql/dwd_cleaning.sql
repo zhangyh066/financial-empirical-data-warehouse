@@ -64,11 +64,16 @@ SELECT
     TRY_CAST(F020201A AS DOUBLE) AS operating_cost,   -- 营业成本
     TRY_CAST(F020301A AS DOUBLE) AS operating_profit, -- 营业利润
     TRY_CAST(F020401A AS DOUBLE) AS interest_expense, -- 利息费用
+    TRY_CAST(F020501A AS DOUBLE) AS income_tax,       -- 所得税费用（五因素杜邦税负因子）
     TRY_CAST(F030101A AS DOUBLE) AS net_income,       -- 净利润
     -- 现金流量表
     TRY_CAST(F040101A AS DOUBLE) AS ocf,              -- 经营活动产生的现金流量净额
+    TRY_CAST(F040201A AS DOUBLE) AS invest_cf,        -- 投资活动现金流净额（现金流三段分解）
+    TRY_CAST(F040301A AS DOUBLE) AS finance_cf,       -- 筹资活动现金流净额（现金流三段分解）
     -- 市场数据
-    TRY_CAST(F100101C AS DOUBLE) AS equity_mv         -- 股权市值
+    TRY_CAST(F100101C AS DOUBLE) AS equity_mv,        -- 股权市值
+    -- 其他资产结构
+    TRY_CAST(F010901A AS DOUBLE) AS fixed_assets      -- 固定资产净额（报表结构）
 FROM ods.financial_raw
 WHERE
     -- 过滤非年底报表（实证论文通常只使用12月31日的年报数据，过滤掉一季报、半年报）
