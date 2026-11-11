@@ -25,6 +25,7 @@ from src.config import (
     get_logger, is_valid_table_name,
 )
 from src.etl.import_raw import DataImporter
+from src.etl.preflight import run_preflight
 
 logger = get_logger("efdw.api")
 
@@ -742,6 +743,47 @@ def run_quality_check():
 # ─────────────────────────────────────────────
 # API: 14. File Upload and Data Import
 # ─────────────────────────────────────────────
+@app.post("/api/import/preflight")
+def preflight_file_api(
+    file: UploadFile = File(...),
+    table_name: str = Form(default=""),
+    varchar_columns: str = Form(default=""),
+    overwrite: bool = Form(default=False),
+):
+    """只读解析上传文件并返回质量报告，不创建、删除或修改任何正式表。"""
+    temp_dir = TMP_DIR
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    file_ext = Path(file.filename).suffix.lower()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext, dir=temp_dir, prefix="preflight_") as tmp:
+        temp_file_path = Path(tmp.name)
+
+    importer = DataImporter(str(DB_PATH))
+    if not table_name:
+        table_name = importer._path_to_table_name(Path(file.filename), "ods")
+    if not is_valid_table_name(table_name):
+        temp_file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"非法表名: {table_name}")
+
+    try:
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        extra_varchar = [v.strip() for v in varchar_columns.split(",")] if varchar_columns else None
+        report = run_preflight(
+            importer,
+            str(temp_file_path),
+            table_name,
+            varchar_columns=extra_varchar,
+            overwrite=overwrite,
+        )
+        return {
+            "success": report["ready"],
+            "message": "预检通过，可以执行正式导入" if report["ready"] else "预检未通过，正式数据库未做任何修改",
+            "report": report,
+        }
+    finally:
+        temp_file_path.unlink(missing_ok=True)
+
+
 @app.post("/api/import")
 def import_file_api(
     file: UploadFile = File(...),

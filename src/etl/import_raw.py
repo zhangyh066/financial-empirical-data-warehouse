@@ -6,7 +6,8 @@ EFDW 通用数据导入引擎
   - 自动识别文件格式
   - 股票代码前导零保护 (Stkcd 等字段自动转 VARCHAR)
   - 通配符批量导入 (如 data/raw/csmar_*.csv)
-  - 导入结果日志与数据质量预检
+  - 导入结果日志与导入后质量检查
+  - 独立内存库只读预检（--preflight，不修改正式数据库）
 用法：
   # 命令行快捷导入（默认导入 data/raw 下的三张标准表）
   python src/etl/import_raw.py
@@ -27,6 +28,7 @@ import os
 import sys
 import glob
 import argparse
+import json
 from pathlib import Path
 from datetime import datetime
 
@@ -36,6 +38,7 @@ import duckdb
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.config import DB_PATH, IMPORTED_DIR, PENDING_DIR, RAW_DIR, get_logger, is_valid_table_name
+from src.etl.preflight import run_preflight
 
 logger = get_logger("efdw.import")
 
@@ -730,6 +733,7 @@ def main():
     )
 
     parser.add_argument("--file", type=str, help="要导入的文件路径")
+    parser.add_argument("--preflight", action="store_true", help="只读预检并输出 JSON，不导入或修改正式数据库")
     parser.add_argument("--table", type=str, help="目标表名 (如 ods.my_table)")
     parser.add_argument("--sheet", type=str, help="Excel 工作表名称 (仅 Excel 格式)")
     parser.add_argument("--scan", type=str, help="扫描目录并自动导入所有可识别文件")
@@ -751,6 +755,22 @@ def main():
 
     importer = DataImporter(db_path)
     extra_varchar = [v.strip() for v in args.varchar.split(",")] if args.varchar else None
+
+    if args.preflight:
+        if not args.file:
+            print("[ERROR] --preflight 需要同时指定 --file")
+            return 2
+        if not args.table:
+            args.table = importer._path_to_table_name(Path(args.file), "ods")
+        report = run_preflight(
+            importer,
+            args.file,
+            args.table,
+            sheet=args.sheet,
+            varchar_columns=extra_varchar,
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["ready"] else 2
 
     # 模式 1: 扫描目录
     if args.scan:
@@ -802,4 +822,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
